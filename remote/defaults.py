@@ -1,12 +1,18 @@
 # Button Configuration
 
+# how long to hold a key before repeating (milliseconds)
+repeat_threshold = 1000
+
+# how often to repeat (milliseconds)
+repeat_interval = 50
+
 layout = (
   'clear',
   'minus',
   'plus',
-  'color',
-  'pixel',
   'hue',
+  'pixel',
+  'color',
   'restore',
   'save',
   'run',
@@ -16,7 +22,7 @@ layout = (
 
 baudrate = 115200
 serial_timeout = 0.1
-command_repetition = 10
+command_repetition = 4
 
 # Circuit Configuration
 

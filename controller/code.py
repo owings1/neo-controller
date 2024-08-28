@@ -18,16 +18,17 @@ import traceback
 
 import board
 import busio
-import hues
 import neopixel
 import sdcardio
 import storage
 from adafruit_ticks import ticks_add, ticks_diff, ticks_ms
 from digitalio import DigitalInOut, Direction
 from microcontroller import Pin
+from rainbowio import colorwheel
 
 OFF, ON = OFFON = True, False
 
+brightness_scale = 100
 lastid: str|None = None
 pixels: neopixel.NeoPixel|None = None
 serial: busio.UART|None = None
@@ -36,12 +37,11 @@ errled: DigitalInOut|None = None
 selected: dict[str, Any] = {}
 offat: dict[DigitalInOut, int] = {}
 sd: sdcardio.SDCard|None = None
-vfs: storage.VfsFat|None = None
 color_to_indexes: dict[str, Collection[int]] = {
   'red': (0,),
   'green': (1,),
   'blue': (2,),
-  'white': ...,
+  'white': range(3),
 }
 
 def main() -> None:
@@ -53,7 +53,7 @@ def main() -> None:
     deinit()
 
 def init() -> None:
-  global actled, errled, pixels, serial
+  global actled, errled, lastid, pixels, serial
   serial = busio.UART(
     None,
     board.RX,
@@ -64,15 +64,13 @@ def init() -> None:
       num_pixels,
       auto_write=False,
       pixel_order=pixel_order)
-  color_to_indexes['white'] = (
-    (3,) if pixels.bpp > 3
-    else range(pixels.bpp))
   actled = init_led(board.LED_GREEN)
   errled = init_led(board.LED_BLUE)
   init_sdcard()
   do_state_restore()
   selected['pixel'] = None
   selected['hue'] = None
+  lastid = None
 
 def deinit() -> None:
   if serial:
@@ -163,16 +161,16 @@ def do_pixel_select(verb: str, quantity: int|None) -> None:
   print(f'{selected=}')
 
 def do_hue_change(verb: str, quantity: int|None) -> None:
-  value = resolve_index_change(verb, quantity, selected['hue'], len(hues.values))
-  hue = (
-    (16, 16, 16) if value is None
-    else hues.values[value])
+  value = resolve_index_change(verb, quantity, selected['hue'], 0x100)
+  hue = as_tuple(
+    0xffffff if value is None
+    else colorwheel(value))
   if selected['pixel'] is None:
     prange = range(num_pixels)
   else:
     prange = (selected['pixel'],)
   for p in prange:
-    pixels[p] = hue + pixels[p][len(hue):]
+    pixels[p] = hue
   pixels.show()
   selected['hue'] = value
   print(f'{selected=}')
@@ -184,11 +182,11 @@ def do_brightness_change(verb: str, quantity: int|None) -> None:
     if verb == 'set':
       value = quantity
     else:
-      value = int(pixels.brightness * 16)
+      value = int(pixels.brightness * brightness_scale)
       if verb == 'minus':
         quantity *= -1
       value += quantity
-  value = max(0, min(16, value)) / 16
+  value = max(0, min(brightness_scale, value)) / brightness_scale
   change = value != pixels.brightness
   print(f'brightness={pixels.brightness} {change=}')
   if change:
@@ -205,17 +203,18 @@ def do_color_change(color: str, verb: str, quantity: int|None) -> None:
     if verb == 'minus':
       quantity *= -1
   change = False
+  initial = as_tuple(initial_color)
   for p in prange:
     values = list(pixels[p])
     pchange = False
     for b in indexes:
       if verb == 'clear' or quantity is None:
-        value = initial_color[b]
+        value = initial[b]
       elif verb == 'set':
         value = quantity
       else:
         value = values[b] + quantity
-      value = max(0, min(16, value))
+      value = max(0, min(0xff, value))
       pchange |= values[b] != value
       values[b] = value
     if pchange:
@@ -245,15 +244,21 @@ def do_state_restore(index: int|None = None) -> bool:
   selected['hue'] = None
   state = state_read(index)
   if not state:
-    pixels.brightness = initial_brightness / 16
+    pixels.brightness = initial_brightness / brightness_scale
     pixels.fill(initial_color)
     pixels.show()
     return False
   brightness, values = state
-  pixels.brightness = brightness / 16
-  for p, value in enumerate(values):
-    pixels[p] = value
-  pixels.show()
+  pixels.brightness = brightness / brightness_scale
+  length = len(values)
+  change = False
+  for p in range(num_pixels):
+    value = values[absindex(p, length)]
+    if change or pixels[p] != value:
+      change = True
+      pixels[p] = value
+  if change:
+    pixels.show()
   return True
 
 def do_run(index: int|None = None):
@@ -279,7 +284,7 @@ def state_read(index: int|None = None) -> tuple[int, tuple[int, ...]]|None:
   return brightness, values
 
 def state_pack() -> Iterator[str]:
-  yield str(int(pixels.brightness * 16))
+  yield str(int(pixels.brightness * brightness_scale))
   for value in pixels:
     yield ','.join(map(str, value))
 
@@ -293,9 +298,9 @@ def state_unpack(packed: Iterable[str]):
     if i >= num_pixels:
       break
     value = tuple(map(int, line.split(',')))
-    if len(value) > pixels.bpp:
-      value = value[:pixels.bpp]
-    elif len(value) != pixels.bpp:
+    if len(value) == 1:
+      value = as_tuple(value[0])
+    if len(value) != pixels.bpp:
       raise ValueError(value)
     yield value
 
@@ -318,8 +323,16 @@ def resolve_index_change(verb: str, quantity: int|None, current: int|None, lengt
       if quantity > 0:
         quantity -= 1
     value += quantity
-    value -= length * (value // length)
+    value = absindex(value, length)
   return value
+
+def as_tuple(value: int|tuple) -> tuple[int, int, int]:
+  if isinstance(value, tuple):
+    return value
+  r = value >> 16
+  g = (value >> 8) & 0xff
+  b = value & 0xff
+  return r, g, b
 
 def init_led(pin: Pin) -> DigitalInOut:
   led = DigitalInOut(pin)
@@ -369,6 +382,12 @@ def deinit_sdcard() -> None:
       pass
     sd.deinit()
     sd = None
+
+def absindex(i: int, length: int) -> int:
+  try:
+    return i - (length * (i // length))
+  except ZeroDivisionError:
+    raise IndexError
 
 if __name__ == '__main__':
   main()

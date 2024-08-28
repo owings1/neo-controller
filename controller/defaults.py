@@ -4,9 +4,9 @@ num_pixels = 7
 
 pixel_order = 'BRG'
 
-initial_brightness = 16
+initial_brightness = 100
 
-initial_color = (16, 16, 16)
+initial_color = 255, 255, 255
 
 # Serial Configuration
 
