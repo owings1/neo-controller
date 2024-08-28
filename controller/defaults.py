@@ -11,6 +11,7 @@ initial_color = (16, 16, 16)
 # Serial Configuration
 
 baudrate = 115200
+serial_timeout = 0.1
 
 # Circuit Configuration
 

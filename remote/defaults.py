@@ -1,6 +1,8 @@
 # Serial Configuration
 
 baudrate = 115200
+serial_timeout = 0.1
+command_repetition = 10
 
 # Circuit Configuration
 

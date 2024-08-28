@@ -30,6 +30,7 @@ actions = {
   'C': ('func', 'draw'),
   'D': ('func', 'save'),
   'E': ('func', 'restore'),
+  'F': ('func', 'noop'),
 }
 
 codes = dict(map(reversed, actions.items()))

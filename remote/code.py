@@ -23,17 +23,18 @@ from microcontroller import Pin
 
 OFF, ON = OFFON = True, False
 
+cmdid: int = 1
 serial: busio.UART|None = None
 actled: DigitalInOut|None = None
 ctlled: DigitalInOut|None = None
 keys: keypad.Keys|None = None
 layout = (
-  ('color', 'control'),
-  ('pixel', 'control'),
-  ('brightness', 'control'),
   ('clear', 'change'),
   ('minus', 'change'),
   ('plus', 'change'),
+  ('color', 'control'),
+  ('pixel', 'control'),
+  ('hue', 'control'),
   ('f1', 'control'),
   ('f2', 'control'),
   ('f3', 'control'),
@@ -72,9 +73,9 @@ def init() -> None:
   global actled, ctlled, keys, serial
   serial = busio.UART(
     board.TX,
-    board.RX,
+    None,
     baudrate=baudrate,
-    timeout=0.1)
+    timeout=serial_timeout)
   for label, keytype in layout:
     if keytype == 'control':
       control[label] = False
@@ -85,6 +86,7 @@ def init() -> None:
   actled = init_led(board.LED_GREEN)
   ctlled = init_led(board.LED_BLUE)
   selected['color'] = 0
+  send_command('func', 'noop', None)
 
 def deinit() -> None:
   if serial:
@@ -124,32 +126,42 @@ def loop() -> None:
     return
   for fkey in fmap:
     if control[fkey]:
-      routine = fmap[fkey][label]
-      if not routine:
+      what = 'func'
+      verb = fmap[fkey][label]
+      if not verb:
         return
-      cmdstr = codes['func', routine]
+      quantity = None
       break
   else:
-    cmdstr = get_change_command(label)
-  print(f'{cmdstr=}')
-  serial.write(f'{cmdstr}\n'.encode())
+    what, verb, quantity = get_change_command(label)
+  send_command(what, verb, quantity)
 
-def get_change_command(verb: str) -> str:
+def send_command(what: str, verb: str, quantity: int|None) -> None:
+  global cmdid
+  if cmdid == 26:
+    cmdid = 1
+  cmdstr = codes[what, verb]
+  if quantity is not None:
+    cmdstr += str(quantity)
+  cmd = f'{chr(cmdid + 96)}{cmdstr}\n'.encode()
+  print(f'{cmdid=} {cmdstr=} {cmd=}')
+  for _ in range(command_repetition):
+    serial.write(cmd)
+  cmdid += 1
+
+def get_change_command(verb: str) -> tuple[str, str, int|None]:
   what = get_what()
   if verb == 'clear':
     quantity = None
   else:
     quantity = 1
-  cmdstr = codes[what, verb]
-  if quantity:
-    cmdstr += str(quantity)
-  return cmdstr
+  return what, verb, quantity
 
 def get_what() -> str:
   if control['pixel']:
     return 'pixel'
-  elif control['brightness']:
-    return 'brightness'
+  elif control['hue']:
+    return 'hue'
   return colors[selected['color']]
 
 def select_color(verb: str) -> None:
