@@ -70,10 +70,7 @@ def init() -> None:
   actled = init_led(board.LED_GREEN)
   errled = init_led(board.LED_BLUE)
   init_sdcard()
-  if not do_state_restore():
-    pixels.fill(initial_color)
-    pixels.brightness = initial_brightness / 16
-    pixels.show()
+  do_state_restore()
   selected['pixel'] = None
   selected['hue'] = None
 
@@ -142,6 +139,8 @@ def do_command(what: str, verb: str, quantity: int|None) -> None:
       do_state_save(quantity)
     elif verb == 'restore':
       do_state_restore(quantity)
+    elif verb == 'run':
+      do_run(quantity)
     elif verb == 'noop':
       pass
     else:
@@ -246,6 +245,9 @@ def do_state_restore(index: int|None = None) -> bool:
   selected['hue'] = None
   state = state_read(index)
   if not state:
+    pixels.brightness = initial_brightness / 16
+    pixels.fill(initial_color)
+    pixels.show()
     return False
   brightness, values = state
   pixels.brightness = brightness / 16
@@ -253,6 +255,9 @@ def do_state_restore(index: int|None = None) -> bool:
     pixels[p] = value
   pixels.show()
   return True
+
+def do_run(index: int|None = None):
+  ...
 
 def state_read(index: int|None = None) -> tuple[int, tuple[int, ...]]|None:
   if not (sd_enabled and check_init_sdcard()):

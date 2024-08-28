@@ -10,7 +10,7 @@ except ImportError as e:
 from terms import *
 
 try:
-  from typing import Any
+  from typing import Any, Iterator
 except ImportError:
   pass
 
@@ -23,39 +23,23 @@ from microcontroller import Pin
 
 OFF, ON = OFFON = True, False
 
-cmdid: int = 1
+idgen: Iterator[int]|None = None
 serial: busio.UART|None = None
 actled: DigitalInOut|None = None
 ctlled: DigitalInOut|None = None
 keys: keypad.Keys|None = None
-layout = (
-  ('clear', 'change'),
-  ('minus', 'change'),
-  ('plus', 'change'),
-  ('color', 'control'),
-  ('pixel', 'control'),
-  ('hue', 'control'),
-  ('f1', 'control'),
-  ('f2', 'control'),
-  ('f3', 'control'),
-)
-fmap = {
-  'f1': {
-    'clear': 'restore',
-    'minus': 'draw',
-    'plus': 'save',
-  },
-  'f2': {
-    'clear': '',
-    'minus': '',
-    'plus': '',
-  },
-  'f3': {
-    'clear': '',
-    'minus': '',
-    'plus': '',
-  }
+keytypes = {
+  'clear': 'change',
+  'minus': 'change',
+  'plus': 'change',
+  'color': 'control',
+  'pixel': 'control',
+  'hue': 'control',
+  'restore': 'control',
+  'save': 'control',
+  'run': 'control',
 }
+fnums: dict[str, int] = {}
 control: dict[str, bool] = {}
 selected: dict[str, Any] = {}
 offat: dict[DigitalInOut, int] = {}
@@ -70,15 +54,19 @@ def main() -> None:
     deinit()
 
 def init() -> None:
-  global actled, ctlled, keys, serial
+  global actled, ctlled, idgen, keys, serial
   serial = busio.UART(
     board.TX,
     None,
     baudrate=baudrate,
     timeout=serial_timeout)
-  for label, keytype in layout:
-    if keytype == 'control':
+  fnum = 0
+  for label in layout:
+    if keytypes[label] == 'control':
       control[label] = False
+    else:
+      fnums[label] = fnum
+      fnum += 1
   keys = keypad.Keys(
     tuple(getattr(board, pin) for pin in button_pins),
     value_when_pressed=False,
@@ -86,6 +74,7 @@ def init() -> None:
   actled = init_led(board.LED_GREEN)
   ctlled = init_led(board.LED_BLUE)
   selected['color'] = 0
+  idgen = cmdid_gen()
   send_command('func', 'noop', None)
 
 def deinit() -> None:
@@ -99,6 +88,8 @@ def deinit() -> None:
     ctlled.deinit()
   offat.clear()
   control.clear()
+  fnums.clear()
+  selected.clear()
 
 def loop() -> None:
   event = keys.events.get()
@@ -106,65 +97,57 @@ def loop() -> None:
     flash_check()
     return
   print(f'{event=}')
-  label, keytype = layout[event.key_number]
+  label = layout[event.key_number]
+  keytype = keytypes[label]
   if not label or not keytype:
     return
   print(f'{keytype=} {label=}')
+
   if keytype == 'control':
     control[label] = event.pressed
     ctlled.value = OFFON[any(control.values())]
     print(control)
     return
+
   if not event.pressed:
     return
+
   if keytype != 'change':
     raise ValueError(keytype)
+
   flash(actled)
-  if control['color']:
-    select_color(label)
-    print(selected)
-    return
-  for fkey in fmap:
-    if control[fkey]:
-      what = 'func'
-      verb = fmap[fkey][label]
-      if not verb:
-        return
-      quantity = None
+
+  for verb in ('restore', 'save', 'run'):
+    if control[verb]:
+      cmd = get_func_command(verb, label)
       break
   else:
-    what, verb, quantity = get_change_command(label)
-  send_command(what, verb, quantity)
+    verb = label
+    for what in ('pixel', 'hue'):
+      if control[what]:
+        break
+    else:
+      what = colors[selected['color']]
+    if what == 'color':
+      do_select_color(verb)
+      print(selected)
+      return
+    cmd = get_change_command(verb, what)
 
-def send_command(what: str, verb: str, quantity: int|None) -> None:
-  global cmdid
-  if cmdid == 26:
-    cmdid = 1
-  cmdstr = codes[what, verb]
-  if quantity is not None:
-    cmdstr += str(quantity)
-  cmd = f'{chr(cmdid + 96)}{cmdstr}\n'.encode()
-  print(f'{cmdid=} {cmdstr=} {cmd=}')
-  for _ in range(command_repetition):
-    serial.write(cmd)
-  cmdid += 1
+  send_command(*cmd)
 
-def get_change_command(verb: str) -> tuple[str, str, int|None]:
-  what = get_what()
-  if verb == 'clear':
+def get_func_command(verb: str, label: str) -> tuple[str, str, int|None]:
+  what = 'func'
+  quantity = fnums[label]
+  if quantity == 0:
     quantity = None
-  else:
-    quantity = 1
   return what, verb, quantity
 
-def get_what() -> str:
-  if control['pixel']:
-    return 'pixel'
-  elif control['hue']:
-    return 'hue'
-  return colors[selected['color']]
+def get_change_command(verb: str, what: str) -> tuple[str, str, int|None]:
+  quantity = None if verb == 'clear' else 1
+  return what, verb, quantity
 
-def select_color(verb: str) -> None:
+def do_select_color(verb: str) -> None:
   if verb == 'clear':
     value = 0
   else:
@@ -175,6 +158,16 @@ def select_color(verb: str) -> None:
       value += 1
     value -= len(colors) * (value // len(colors))
   selected['color'] = value
+
+def send_command(what: str, verb: str, quantity: int|None) -> None:
+  cmdstr = codes[what, verb]
+  if quantity is not None:
+    cmdstr += str(quantity)
+  cmdid = chr(next(idgen))
+  cmd = f'{cmdid}{cmdstr}\n'.encode()
+  print(f'{cmdid=} {cmdstr=} {cmd=}')
+  for _ in range(command_repetition):
+    serial.write(cmd)
 
 def init_led(pin: Pin) -> DigitalInOut:
   led = DigitalInOut(pin)
@@ -190,6 +183,12 @@ def flash_check() -> None:
   for io in offat:
     if io.value is ON and ticks_diff(ticks_ms(), offat[io]) >= 0:
       io.value = OFF
+
+def cmdid_gen():
+  while True:
+    yield from range(ord('0'), ord('9') + 1)
+    yield from range(ord('a'), ord('z') + 1)
+    yield from range(ord('A'), ord('Z') + 1)
 
 if __name__ == '__main__':
   main()

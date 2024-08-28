@@ -1,3 +1,17 @@
+# Button Configuration
+
+layout = (
+  'clear',
+  'minus',
+  'plus',
+  'color',
+  'pixel',
+  'hue',
+  'restore',
+  'save',
+  'run',
+)
+
 # Serial Configuration
 
 baudrate = 115200
