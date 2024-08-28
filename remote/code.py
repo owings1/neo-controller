@@ -173,7 +173,7 @@ def do_select_color(verb: str) -> None:
       value -= 1
     else:
       value += 1
-    value -= len(colors) * (value // len(colors))
+    value = absindex(value, len(colors))
   selected['color'] = value
 
 def send_command(what: str, verb: str, quantity: int|None) -> None:
@@ -213,6 +213,12 @@ def cmdid_gen():
   while True:
     for r in ranges:
       yield from map(chr, r)
+
+def absindex(i: int, length: int) -> int:
+  try:
+    return i - (length * (i // length))
+  except ZeroDivisionError:
+    raise IndexError
 
 if __name__ == '__main__':
   main()
