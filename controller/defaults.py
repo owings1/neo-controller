@@ -8,6 +8,12 @@ initial_brightness = 64
 
 initial_color = 255, 255, 255
 
+# Animation speeds
+
+anim_fast = 10
+anim_medium = 45
+anim_slow = 100
+
 # Serial Configuration
 
 baudrate = 115200

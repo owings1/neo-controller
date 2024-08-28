@@ -18,6 +18,7 @@ from math import ceil
 import board
 import busio
 import neopixel
+import rgbutil
 import sdcardio
 import storage
 from adafruit_ticks import ticks_add, ticks_diff, ticks_ms
@@ -44,6 +45,8 @@ color_to_indexes: dict[str, Collection[int]] = {
   'blue': (2,),
   'white': range(3),
 }
+
+anim: dict[str, Any] = {}
 
 def main() -> None:
   try:
@@ -87,8 +90,10 @@ def deinit() -> None:
 def loop() -> None:
   cmdstr = read_cmdstr()
   if not cmdstr:
+    anim_check()
     flash_check()
     return
+  anim.clear()
   flash(actled)
   print(f'{cmdstr=}')
   try:
@@ -101,7 +106,7 @@ def loop() -> None:
 
 def read_cmdstr() -> str|None:
   global lastid
-  cmdstr = serial.readline()
+  cmdstr = serial.in_waiting and serial.readline()
   if cmdstr:
       cmdstr = cmdstr.strip(b'\x00')
       try:
@@ -167,11 +172,11 @@ def do_hue_change(verb: str, quantity: int|None) -> None:
   else:
     prange = (selected['pixel'],)
   if selected['hue'] is None and quantity is not None:
-    current = wheel_reverse(*pixels[next(iter(prange))])
+    current = rgbutil.wheel_reverse(*pixels[next(iter(prange))])
   else:
     current = selected['hue']
   value = resolve_index_change(verb, quantity, current, 0x100)
-  hue = as_tuple(colorwheel(value or 0))
+  hue = rgbutil.as_tuple(colorwheel(value or 0))
   if selected['pixel'] is None:
     prange = range(num_pixels)
   else:
@@ -208,7 +213,7 @@ def do_color_change(color: str, verb: str, quantity: int|None) -> None:
     if verb == 'minus':
       quantity *= -1
   change = False
-  initial = as_tuple(initial_color)
+  initial = rgbutil.as_tuple(initial_color)
   for p in prange:
     values = list(pixels[p])
     pchange = False
@@ -268,7 +273,41 @@ def do_state_restore(index: int|None = None) -> bool:
   return True
 
 def do_run(index: int|None = None):
-  ...
+  if index is None:
+    anim.clear()
+  elif index == 1 or index == 2:
+    path = (0xff0000, 0x00ff00, 0x0000ff, 0xff0000)
+    steps = 0x100 * (3 if index == 1 else 1)
+    interval = anim_slow if index == 1 else anim_fast
+    it = rgbutil.transition(path, steps=steps, repeat=True)
+    anim.update(
+      type='fill',
+      at=ticks_ms(),
+      interval=interval,
+      it=it,
+      current=None)
+  elif index in range(3, 6):
+    steps = 0x100 * (6 - index)
+    if index == 3:
+      interval = anim_slow
+    elif index == 4:
+      interval = anim_medium
+    else:
+      interval = anim_fast
+    state_indexes = (None,) + tuple(range(1, 6))
+    states = tuple(filter(None, map(state_read, state_indexes)))
+    if len(states) > 1:
+      its = tuple(
+        rgbutil.transition(
+          tuple(state[1][p] for state in states) + (states[0][1][p],),
+          steps=steps,
+          repeat=True)
+        for p in range(num_pixels))
+      anim.update(
+        type='each',
+        at=ticks_ms(),
+        interval=interval,
+        its=its)
 
 def state_read(index: int|None = None) -> tuple[int, tuple[int, ...]]|None:
   if not (sd_enabled and check_init_sdcard()):
@@ -305,7 +344,7 @@ def state_unpack(packed: Iterable[str]):
       break
     value = tuple(map(int, line.split(',')))
     if len(value) == 1:
-      value = as_tuple(value[0])
+      value = rgbutil.as_tuple(value[0])
     if len(value) != pixels.bpp:
       raise ValueError(value)
     yield value
@@ -331,14 +370,6 @@ def resolve_index_change(verb: str, quantity: int|None, current: int|None, lengt
     value += quantity
     value = absindex(value, length)
   return value
-
-def as_tuple(value: int|tuple) -> tuple[int, int, int]:
-  if isinstance(value, tuple):
-    return value
-  r = value >> 16
-  g = (value >> 8) & 0xff
-  b = value & 0xff
-  return r, g, b
 
 def init_led(pin: Pin) -> DigitalInOut:
   led = DigitalInOut(pin)
@@ -401,30 +432,39 @@ def absindex(i: int, length: int) -> int:
   except ZeroDivisionError:
     raise IndexError
 
-def wheel_reverse(*rgb: int) -> int:
-  rgb = list(rgb)
-  if all(rgb):
-    rgb[rgb.index(min(rgb))] = 0
-  total = sum(rgb)
-  correct = 0xff - total
-  if correct:
-    for i in range(3):
-      rgb[i] += int(correct * (rgb[i] / 0xff))
-    total = sum(rgb)
-    correct = 0xff - total
-    if correct:
-      for i in range(3):
-        if rgb[i] and 0 <= rgb[i] + correct <= 0xff:
-          rgb[i] += correct
-          break
-      total = sum(rgb)
-  if total != 0xff:
-    return 0
-  if not rgb[2]:
-    return rgb[1] // 3
-  if not rgb[0]:
-    return rgb[2] // 3 + 85
-  return rgb[0] // 3 + 170
+def anim_check():
+  if not (anim and ticks_diff(ticks_ms(), anim['at']) >= 0):
+    return
+  try:
+    if anim['type'] == 'fill':
+      _anim_fill()
+    elif anim['type'] == 'each':
+      _anim_each()
+    else:
+      raise ValueError(anim['type'])
+  except StopIteration:
+    anim.clear()
+  else:
+    anim['at'] = ticks_add(anim['at'], anim['interval'])
+
+def _anim_fill():
+  value = next(anim['it'])
+  if value != anim['current']:
+    pixels.fill(value)
+    pixels.show()
+  anim['current'] = value
+
+def _anim_each():
+  change = False
+  for p, it in enumerate(anim['its']):
+    value = next(it)
+    if change or pixels[p] != value:
+      change = True
+      pixels[p] = value
+  if change:
+    pixels.show()
+
+  ...
 
 if __name__ == '__main__':
   main()

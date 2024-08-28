@@ -209,7 +209,7 @@ def flash_check() -> None:
 
 def repeat_check() -> None:
   if repeat and ticks_diff(ticks_ms(), repeat['at']) >= 0:
-    repeat['at'] += repeat['interval']
+    repeat['at'] = ticks_add(repeat['at'], repeat['interval'])
     repeat['func'](*repeat['args'])
 
 def cmdid_gen():
