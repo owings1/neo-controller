@@ -66,6 +66,7 @@ def init() -> None:
   pixels = neopixel.NeoPixel(
       getattr(board, data_pin),
       num_pixels,
+      brightness=initial_brightness / brightness_scale,
       auto_write=False,
       pixel_order=pixel_order)
   actled = init_led(board.LED_GREEN)
@@ -93,12 +94,13 @@ def loop() -> None:
     anim_check()
     flash_check()
     return
-  anim.clear()
   flash(actled)
   print(f'{cmdstr=}')
   try:
     cmd = parse_command(cmdstr)
     print(f'{cmd=}')
+    if cmd[0] != 'brightness':
+      anim.clear()
     do_command(*cmd)
   except Exception as err:
     traceback.print_exception(err)
@@ -254,14 +256,11 @@ def do_state_restore(index: int|None = None) -> bool:
   selected['hue'] = None
   state = state_read(index)
   if not state:
-    pixels.brightness = initial_brightness / brightness_scale
     pixels.fill(initial_color)
     pixels.show()
     return False
-  brightness, values = state
-  brightness_new = brightness / brightness_scale
-  change = pixels.brightness != brightness_new
-  pixels.brightness = brightness_new
+  change = False
+  values = state[1]
   length = len(values)
   for p in range(num_pixels):
     value = values[absindex(p, length)]
@@ -463,8 +462,6 @@ def _anim_each():
       pixels[p] = value
   if change:
     pixels.show()
-
-  ...
 
 if __name__ == '__main__':
   main()

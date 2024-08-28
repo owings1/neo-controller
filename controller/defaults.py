@@ -4,7 +4,7 @@ num_pixels = 7
 
 pixel_order = 'BRG'
 
-initial_brightness = 64
+initial_brightness = 12
 
 initial_color = 255, 255, 255
 
