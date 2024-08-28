@@ -7,8 +7,6 @@ try:
 except ImportError as e:
   print(f'Error loading settings: {type(e).__name__}: {e}')
 
-from terms import *
-
 try:
   from typing import Any, Iterator
 except ImportError:
@@ -20,6 +18,8 @@ import keypad
 from adafruit_ticks import ticks_add, ticks_diff, ticks_ms
 from digitalio import DigitalInOut, Direction
 from microcontroller import Pin
+
+from terms import *
 
 OFF, ON = OFFON = True, False
 
@@ -197,9 +197,15 @@ def flash(io: DigitalInOut, ms: int = 100) -> None:
   offat[io] = ticks_add(ticks_ms(), ms)
 
 def flash_check() -> None:
+  rem: set|None = None
   for io in offat:
     if io.value is ON and ticks_diff(ticks_ms(), offat[io]) >= 0:
       io.value = OFF
+      rem = rem or set()
+      rem.add(io)
+  if rem:
+    for io in rem:
+      del(offat[io])
 
 def repeat_check() -> None:
   if repeat and ticks_diff(ticks_ms(), repeat['at']) >= 0:

@@ -7,14 +7,13 @@ try:
 except ImportError as e:
   print(f'Error loading settings: {type(e).__name__}: {e}')
 
-from terms import *
-
 try:
   from typing import Any, Collection, Iterable, Iterator
 except ImportError:
   pass
 
 import traceback
+from math import ceil
 
 import board
 import busio
@@ -26,9 +25,11 @@ from digitalio import DigitalInOut, Direction
 from microcontroller import Pin
 from rainbowio import colorwheel
 
+from terms import *
+
 OFF, ON = OFFON = True, False
 
-brightness_scale = 100
+brightness_scale = 64
 lastid: str|None = None
 pixels: neopixel.NeoPixel|None = None
 serial: busio.UART|None = None
@@ -161,10 +162,16 @@ def do_pixel_select(verb: str, quantity: int|None) -> None:
   print(f'{selected=}')
 
 def do_hue_change(verb: str, quantity: int|None) -> None:
-  value = resolve_index_change(verb, quantity, selected['hue'], 0x100)
-  hue = as_tuple(
-    0xffffff if value is None
-    else colorwheel(value))
+  if selected['pixel'] is None:
+    prange = range(num_pixels)
+  else:
+    prange = (selected['pixel'],)
+  if selected['hue'] is None and quantity is not None:
+    current = wheel_reverse(*pixels[next(iter(prange))])
+  else:
+    current = selected['hue']
+  value = resolve_index_change(verb, quantity, current, 0x100)
+  hue = as_tuple(colorwheel(value or 0))
   if selected['pixel'] is None:
     prange = range(num_pixels)
   else:
@@ -178,14 +185,12 @@ def do_hue_change(verb: str, quantity: int|None) -> None:
 def do_brightness_change(verb: str, quantity: int|None) -> None:
   if verb == 'clear' or quantity is None:
     value = initial_brightness
+  elif verb == 'set':
+    value = quantity
+  elif verb == 'minus':
+    value = ceil(pixels.brightness * brightness_scale) - quantity
   else:
-    if verb == 'set':
-      value = quantity
-    else:
-      value = int(pixels.brightness * brightness_scale)
-      if verb == 'minus':
-        quantity *= -1
-      value += quantity
+    value = int(pixels.brightness * brightness_scale) + quantity
   value = max(0, min(brightness_scale, value)) / brightness_scale
   change = value != pixels.brightness
   print(f'brightness={pixels.brightness} {change=}')
@@ -249,9 +254,10 @@ def do_state_restore(index: int|None = None) -> bool:
     pixels.show()
     return False
   brightness, values = state
-  pixels.brightness = brightness / brightness_scale
+  brightness_new = brightness / brightness_scale
+  change = pixels.brightness != brightness_new
+  pixels.brightness = brightness_new
   length = len(values)
-  change = False
   for p in range(num_pixels):
     value = values[absindex(p, length)]
     if change or pixels[p] != value:
@@ -345,9 +351,15 @@ def flash(io: DigitalInOut, ms: int = 100) -> None:
   offat[io] = ticks_add(ticks_ms(), ms)
 
 def flash_check() -> None:
+  rem: set|None = None
   for io in offat:
     if io.value is ON and ticks_diff(ticks_ms(), offat[io]) >= 0:
       io.value = OFF
+      rem = rem or set()
+      rem.add(io)
+  if rem:
+    for io in rem:
+      del(offat[io])
 
 def check_init_sdcard() -> bool:
   if sd:
@@ -388,6 +400,31 @@ def absindex(i: int, length: int) -> int:
     return i - (length * (i // length))
   except ZeroDivisionError:
     raise IndexError
+
+def wheel_reverse(*rgb: int) -> int:
+  rgb = list(rgb)
+  if all(rgb):
+    rgb[rgb.index(min(rgb))] = 0
+  total = sum(rgb)
+  correct = 0xff - total
+  if correct:
+    for i in range(3):
+      rgb[i] += int(correct * (rgb[i] / 0xff))
+    total = sum(rgb)
+    correct = 0xff - total
+    if correct:
+      for i in range(3):
+        if rgb[i] and 0 <= rgb[i] + correct <= 0xff:
+          rgb[i] += correct
+          break
+      total = sum(rgb)
+  if total != 0xff:
+    return 0
+  if not rgb[2]:
+    return rgb[1] // 3
+  if not rgb[0]:
+    return rgb[2] // 3 + 85
+  return rgb[0] // 3 + 170
 
 if __name__ == '__main__':
   main()
