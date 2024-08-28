@@ -19,10 +19,9 @@ import busio
 import keypad
 from adafruit_ticks import ticks_add, ticks_diff, ticks_ms
 from digitalio import DigitalInOut, Direction
+from microcontroller import Pin
 
-ON = False
-OFF = True
-OFFON = (OFF, ON)
+OFF, ON = OFFON = True, False
 
 serial: busio.UART|None = None
 actled: DigitalInOut|None = None
@@ -41,9 +40,9 @@ layout = (
 )
 fmap = {
   'f1': {
-    'clear': 'draw',
-    'minus': 'save',
-    'plus': '',
+    'clear': 'restore',
+    'minus': 'draw',
+    'plus': 'save',
   },
   'f2': {
     'clear': '',
@@ -61,7 +60,7 @@ selected: dict[str, Any] = {}
 offat: dict[DigitalInOut, int] = {}
 colors = ('white', 'red', 'green', 'blue')
 
-def main():
+def main() -> None:
   try:
     init()
     while True:
@@ -69,7 +68,7 @@ def main():
   finally:
     deinit()
 
-def init():
+def init() -> None:
   global actled, ctlled, keys, serial
   serial = busio.UART(
     board.TX,
@@ -87,7 +86,7 @@ def init():
   ctlled = init_led(board.LED_BLUE)
   selected['color'] = 0
 
-def deinit():
+def deinit() -> None:
   if serial:
     serial.deinit()
   if keys:
@@ -99,7 +98,7 @@ def deinit():
   offat.clear()
   control.clear()
 
-def loop():
+def loop() -> None:
   event = keys.events.get()
   if not event:
     flash_check()
@@ -128,36 +127,32 @@ def loop():
       routine = fmap[fkey][label]
       if not routine:
         return
-      cmdstr = codes[f'func_{routine}']
+      cmdstr = codes['func', routine]
       break
   else:
     cmdstr = get_change_command(label)
   print(f'{cmdstr=}')
   serial.write(f'{cmdstr}\n'.encode())
 
-def get_change_command(verb: str):
+def get_change_command(verb: str) -> str:
   what = get_what()
-  action = f'{what}_{verb}'
   if verb == 'clear':
     quantity = None
-  elif what == 'brightness':
-    quantity = 0.1
   else:
     quantity = 1
-  print(f'{action=} {quantity=}')
-  cmdstr = codes[action]
+  cmdstr = codes[what, verb]
   if quantity:
     cmdstr += str(quantity)
   return cmdstr
 
-def get_what():
+def get_what() -> str:
   if control['pixel']:
     return 'pixel'
   elif control['brightness']:
     return 'brightness'
   return colors[selected['color']]
 
-def select_color(verb: str):
+def select_color(verb: str) -> None:
   if verb == 'clear':
     value = 0
   else:
@@ -169,17 +164,17 @@ def select_color(verb: str):
     value -= len(colors) * (value // len(colors))
   selected['color'] = value
 
-def init_led(pin):
+def init_led(pin: Pin) -> DigitalInOut:
   led = DigitalInOut(pin)
   led.direction = Direction.OUTPUT
   led.value = OFF
   return led
 
-def flash(io: DigitalInOut, ms: int = 100):
+def flash(io: DigitalInOut, ms: int = 100) -> None:
   io.value = ON
   offat[io] = ticks_add(ticks_ms(), ms)
 
-def flash_check():
+def flash_check() -> None:
   for io in offat:
     if io.value is ON and ticks_diff(ticks_ms(), offat[io]) >= 0:
       io.value = OFF

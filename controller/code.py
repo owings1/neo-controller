@@ -10,25 +10,22 @@ except ImportError as e:
 from terms import *
 
 try:
-  from typing import Any, Sequence, Iterable, Iterator
+  from typing import Any, Collection, Iterable, Iterator
 except ImportError:
   pass
+
+import traceback
 
 import board
 import busio
 import neopixel
 import sdcardio
 import storage
-
-import os
-import traceback
-
 from adafruit_ticks import ticks_add, ticks_diff, ticks_ms
 from digitalio import DigitalInOut, Direction
+from microcontroller import Pin
 
-ON = False
-OFF = True
-OFFON = (OFF, ON)
+OFF, ON = OFFON = True, False
 
 pixels: neopixel.NeoPixel|None = None
 serial: busio.UART|None = None
@@ -37,8 +34,14 @@ selected: dict[str, Any] = {}
 offat: dict[DigitalInOut, int] = {}
 sd: sdcardio.SDCard|None = None
 vfs: storage.VfsFat|None = None
+color_to_indexes: dict[str, Collection[int]] = {
+  'red': (0,),
+  'green': (1,),
+  'blue': (2,),
+  'white': ...,
+}
 
-def main():
+def main() -> None:
   try:
     init()
     while True:
@@ -46,7 +49,7 @@ def main():
   finally:
     deinit()
 
-def init():
+def init() -> None:
   global actled, pixels, serial
   serial = busio.UART(
     board.TX,
@@ -58,15 +61,18 @@ def init():
       num_pixels,
       auto_write=False,
       pixel_order=pixel_order)
+  color_to_indexes['white'] = (
+    (3,) if pixels.bpp > 3
+    else range(pixels.bpp))
   actled = init_led(board.LED_GREEN)
   init_sdcard()
   if not do_state_restore():
     pixels.fill(initial_color)
-    pixels.brightness = initial_brightness
+    pixels.brightness = initial_brightness / 16
     pixels.show()
   selected['pixel'] = None
 
-def deinit():
+def deinit() -> None:
   if serial:
     serial.deinit()
   if pixels:
@@ -75,7 +81,7 @@ def deinit():
     actled.deinit()
   deinit_sdcard()
 
-def loop():
+def loop() -> None:
   cmdstr = read_cmdstr()
   if not cmdstr:
     flash_check()
@@ -89,53 +95,47 @@ def loop():
   except Exception as err:
     print(f'Warning: {type(err)}: {err}')
 
-def read_cmdstr():
+def read_cmdstr() -> str|None:
+  serial.read()
   cmdstr = serial.readline()
   if cmdstr:
       cmdstr = str(cmdstr, 'utf-8')
       cmdstr = cmdstr.strip('\x00').strip()
   return cmdstr or None
 
-def parse_command(cmdstr: str):
-  action = actions[cmdstr[0]]
-  what, verb = action.split('_')
-  if what == 'func' or verb == 'clear':
+def parse_command(cmdstr: str) -> tuple[str, str, int|None]:
+  what, verb = actions[cmdstr[0]]
+  if len(cmdstr) == 1 or verb == 'clear':
     quantity = None
   else:
-    quantity = float(cmdstr[1:])
-    if what != 'brightness':
-      if int(quantity) != quantity:
-        raise ValueError(quantity)
-      quantity = int(quantity)
+    quantity = int(cmdstr[1:])
   return what, verb, quantity
 
-def do_command(what: str, verb: str, quantity: float|int|None):
-  action = f'{what}_{verb}'
+def do_command(what: str, verb: str, quantity: int|None) -> None:
+  action = (what, verb)
   if action not in codes:
     raise ValueError(action)
   if what == 'func':
     if verb == 'draw':
       pixels.show()
     elif verb == 'save':
-      do_state_save()
+      do_state_save(quantity)
+    elif verb == 'restore':
+      do_state_restore(quantity)
     else:
       raise ValueError(verb)
   elif what == 'pixel':
     do_pixel_select(verb, quantity)
+  elif what == 'hue':
+    do_hue_change(verb, quantity)
   elif what == 'brightness':
     do_brightness_change(verb, quantity)
+  elif what in color_to_indexes:
+    do_color_change(what, verb, quantity)
   else:
-    b = what[0].upper()
-    try:
-      indexes = ('RGBW'[:len(pixel_order)].index(b),)
-    except ValueError:
-      if b != 'W':
-        raise
-      indexes = range(len(pixel_order))
-    print(f'{b=} {indexes=}')
-    do_bytes_change(indexes, verb, quantity)
+    raise ValueError(what)
 
-def do_pixel_select(verb: str, quantity: int|None):
+def do_pixel_select(verb: str, quantity: int|None) -> None:
   if verb == 'clear' or quantity is None:
     value = None
   else:
@@ -159,26 +159,28 @@ def do_pixel_select(verb: str, quantity: int|None):
   selected['pixel'] = value
   print(f'{selected=}')
 
-def do_brightness_change(verb: str, quantity: float|None):
+def do_brightness_change(verb: str, quantity: int|None) -> None:
   if verb == 'clear' or quantity is None:
     value = initial_brightness
   else:
     if verb == 'set':
       value = quantity
     else:
-      value = pixels.brightness
+      value = int(pixels.brightness * 16)
       if verb == 'minus':
         quantity *= -1
       value += quantity
-    value = pixels.brightness + quantity
-  value = max(0, min(1, value))
+  value = max(0, min(16, value)) / 16
   change = value != pixels.brightness
   print(f'brightness={pixels.brightness} {change=}')
   if change:
     pixels.brightness = value
     pixels.show()
 
-def do_bytes_change(indexes: Sequence[int]|range, verb: str, quantity: int|None):
+def do_hue_change(verb: str, quantity: int|None) -> None:
+  ...
+def do_color_change(color: str, verb: str, quantity: int|None) -> None:
+  indexes = color_to_indexes[color]
   if selected['pixel'] is None:
     prange = range(num_pixels)
   else:
@@ -207,9 +209,12 @@ def do_bytes_change(indexes: Sequence[int]|range, verb: str, quantity: int|None)
   if change:
     pixels.show()
 
-def do_state_save(name = 'state') -> bool:
+def do_state_save(index: int|None = None) -> bool:
   if not (sd_enabled and check_init_sdcard()):
     return False
+  name = 'state'
+  if index is not None:
+    name = f'{name}_{index}'
   text = '\n'.join(state_pack())
   try:
     with open(f'/sd/{name}', 'w') as file:
@@ -219,20 +224,23 @@ def do_state_save(name = 'state') -> bool:
     return False
   return True
 
-def do_state_restore(name = 'state') -> bool:
-  state = state_read(name)
+def do_state_restore(index: int|None = None) -> bool:
+  state = state_read(index)
   if not state:
     return False
   brightness, values = state
-  pixels.brightness = brightness
+  pixels.brightness = brightness / 16
   for p, value in enumerate(values):
     pixels[p] = value
   pixels.show()
   return True
 
-def state_read(name = 'state') -> tuple[float, tuple[int, ...]]|None:
+def state_read(index: int|None = None) -> tuple[int, tuple[int, ...]]|None:
   if not (sd_enabled and check_init_sdcard()):
     return
+  name = 'state'
+  if index is not None:
+    name = f'{name}_{index}'
   try:
     with open(f'/sd/{name}') as file:
       text = file.read().strip()
@@ -247,14 +255,14 @@ def state_read(name = 'state') -> tuple[float, tuple[int, ...]]|None:
   return brightness, values
 
 def state_pack() -> Iterator[str]:
-  yield str(pixels.brightness)
+  yield str(int(pixels.brightness * 16))
   for value in pixels:
     yield ','.join(map(str, value))
 
 def state_unpack(packed: Iterable[str]):
   it = iter(packed)
   try:
-    yield float(next(it))
+    yield int(next(it))
   except StopIteration:
     raise ValueError
   for i, line in enumerate(it):
@@ -267,22 +275,22 @@ def state_unpack(packed: Iterable[str]):
       raise ValueError(value)
     yield value
 
-def init_led(pin):
+def init_led(pin: Pin) -> DigitalInOut:
   led = DigitalInOut(pin)
   led.direction = Direction.OUTPUT
   led.value = OFF
   return led
 
-def flash(io: DigitalInOut, ms: int = 100):
+def flash(io: DigitalInOut, ms: int = 100) -> None:
   io.value = ON
   offat[io] = ticks_add(ticks_ms(), ms)
 
-def flash_check():
+def flash_check() -> None:
   for io in offat:
     if io.value is ON and ticks_diff(ticks_ms(), offat[io]) >= 0:
       io.value = OFF
 
-def check_init_sdcard():
+def check_init_sdcard() -> bool:
   if sd:
     try:
       open('/sd/.mountcheck').close()
@@ -294,12 +302,11 @@ def check_init_sdcard():
 def init_sdcard() -> bool:
   if not sd_enabled:
     return False
-  global sd, vfs
+  global sd
   deinit_sdcard()
   try:
     sd = sdcardio.SDCard(board.SPI(), getattr(board, sd_cs_pin))
-    vfs = storage.VfsFat(sd)
-    storage.mount(vfs, '/sd')
+    storage.mount(storage.VfsFat(sd), '/sd')
     open('/sd/.mountcheck', 'w').close()
   except OSError as err:
     traceback.print_exception(err)
@@ -307,15 +314,13 @@ def init_sdcard() -> bool:
     return False
   return True
 
-def deinit_sdcard():
-  global sd, vfs
-  if vfs:
+def deinit_sdcard() -> None:
+  global sd
+  if sd:
     try:
       storage.umount('/sd')
     except OSError:
       pass
-    vfs = None
-  if sd:
     sd.deinit()
     sd = None
 
