@@ -27,11 +27,13 @@ actions = {
   'z': ('hue', 'plus'),
   'A': ('hue', 'minus'),
   'B': ('hue', 'clear'),
-  'C': ('func', 'draw'),
-  'D': ('func', 'save'),
-  'E': ('func', 'restore'),
-  'F': ('func', 'run'),
-  'G': ('func', 'noop'),
+  'C': ('state', 'save'),
+  'D': ('state', 'restore'),
+  'E': ('state', 'clear'),
+  'F': ('func_draw', 'run'),
+  'G': ('func_noop', 'run'),
+  'H': ('anim_wheel_loop', 'run'),
+  'I': ('anim_state_loop', 'run'),
 }
 
 codes = dict(map(reversed, actions.items()))

@@ -6,13 +6,15 @@ pixel_order = 'BRG'
 
 initial_brightness = 12
 
-initial_color = 255, 255, 255
+initial_color = 0xffffff
 
 # Animation speeds
 
-anim_fast = 10
-anim_medium = 45
-anim_slow = 100
+anim_speeds = (
+  10,
+  50,
+  100,
+)
 
 # Serial Configuration
 

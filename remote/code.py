@@ -1,16 +1,20 @@
 from __future__ import annotations
 
-from defaults import *
-
 try:
-  from settings import *
-except ImportError as e:
-  print(f'Error loading settings: {type(e).__name__}: {e}')
-
-try:
-  from typing import Any, Iterator
+  from typing import TYPE_CHECKING, Any, Iterator
 except ImportError:
+  TYPE_CHECKING = False
   pass
+
+if TYPE_CHECKING:
+  import defaults
+  import defaults as settings
+else:
+  import defaults
+  import settings
+  settings.__dict__.update(
+    (name, getattr(settings, name, getattr(defaults, name)))
+    for name in defaults.__dict__)
 
 import board
 import busio
@@ -39,6 +43,14 @@ keytypes = {
   'save': 'meta',
   'run': 'meta',
 }
+run_presets = (
+  ('func_draw', None),
+  ('anim_wheel_loop', 2),
+  ('anim_wheel_loop', 0),
+  ('anim_state_loop', 2),
+  ('anim_state_loop', 1),
+  ('anim_state_loop', 0),
+)
 fnums: dict[str, int] = {}
 control: dict[str, bool] = {}
 meta: dict[str, bool] = {}
@@ -57,9 +69,9 @@ def main() -> None:
 
 def init() -> None:
   global actled, ctlled, idgen, keys, serial
-  serial = busio.UART(board.TX, None, baudrate=baudrate)
+  serial = busio.UART(board.TX, None, baudrate=settings.baudrate)
   fnum = 0
-  for label in layout:
+  for label in settings.layout:
     if keytypes[label] == 'meta':
       meta[label] = False
       continue
@@ -68,14 +80,14 @@ def init() -> None:
     fnums[label] = fnum
     fnum += 1
   keys = keypad.Keys(
-    tuple(getattr(board, pin) for pin in button_pins),
+    tuple(getattr(board, pin) for pin in settings.button_pins),
     value_when_pressed=False,
     pull=True)
   actled = init_led(board.LED_GREEN)
   ctlled = init_led(board.LED_BLUE)
   selected['color'] = 0
   idgen = cmdid_gen()
-  send_command('func', 'noop', None)
+  send_command('func_noop', 'run', None)
 
 def deinit() -> None:
   if serial:
@@ -101,7 +113,7 @@ def loop() -> None:
     return
   print(f'{event=}')
   repeat.clear()
-  label = layout[event.key_number]
+  label = settings.layout[event.key_number]
   keytype = keytypes[label]
   if not label or not keytype:
     return
@@ -116,7 +128,7 @@ def loop() -> None:
   if event.pressed:
     for verb in meta:
       if meta[verb]:
-        send_command(*get_func_command(verb, label))
+        send_command(*get_meta_command(verb, label))
         return
 
   if keytype == 'control':
@@ -132,7 +144,7 @@ def loop() -> None:
     raise ValueError(keytype)
 
   verb = label
-  for what in ('color', 'pixel', 'hue'):
+  for what in control:
     if control[what]:
       break
   else:
@@ -145,18 +157,22 @@ def loop() -> None:
 
   cmd = get_change_command(verb, what)
   repeat.update(
-    at=ticks_add(ticks_ms(), repeat_threshold),
+    at=ticks_add(ticks_ms(), settings.repeat_threshold),
     func=send_command,
     args=cmd,
-    interval=repeat_interval)
+    interval=settings.repeat_interval)
 
   send_command(*cmd)
 
-def get_func_command(verb: str, label: str) -> tuple[str, str, int|None]:
-  what = 'func'
-  quantity = fnums[label]
-  if quantity == 0:
-    quantity = None
+def get_meta_command(verb: str, label: str) -> tuple[str, str, int|None]:
+  fnum = fnums[label]
+  if verb == 'run':
+    what, quantity = run_presets[fnum]
+  elif ('state', verb) in codes:
+    what = 'state'
+    quantity = fnum
+  else:
+    raise ValueError(verb)
   return what, verb, quantity
 
 def get_change_command(verb: str, what: str) -> tuple[str, str, int|None]:
@@ -183,7 +199,7 @@ def send_command(what: str, verb: str, quantity: int|None) -> None:
     cmdstr += str(quantity)
   cmd = f'{next(idgen)}{cmdstr}\n'.encode()
   print(f'{cmdstr=} {cmd=}')
-  for _ in range(command_repetition):
+  for _ in range(-1, settings.command_repetition):
     serial.write(cmd)
 
 def init_led(pin: Pin) -> DigitalInOut:

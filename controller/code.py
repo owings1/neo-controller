@@ -1,17 +1,22 @@
 from __future__ import annotations
 
-from defaults import *
-
 try:
-  from settings import *
-except ImportError as e:
-  print(f'Error loading settings: {type(e).__name__}: {e}')
-
-try:
-  from typing import Any, Collection, Iterable, Iterator
+  from typing import TYPE_CHECKING, Any, Collection, Iterable, Iterator
 except ImportError:
+  TYPE_CHECKING = False
   pass
 
+if TYPE_CHECKING:
+  import defaults
+  import defaults as settings
+else:
+  import defaults
+  import settings
+  settings.__dict__.update(
+    (name, getattr(settings, name, getattr(defaults, name)))
+    for name in defaults.__dict__)
+  
+import os
 import traceback
 from math import ceil
 
@@ -19,34 +24,27 @@ import board
 import busio
 import neopixel
 import rgbutil
-import sdcardio
-import storage
 from adafruit_ticks import ticks_add, ticks_diff, ticks_ms
 from digitalio import DigitalInOut, Direction
 from microcontroller import Pin
+from neopixel import NeoPixel
 from rainbowio import colorwheel
+from sdcard import SDcard
 
 from terms import *
 
 OFF, ON = OFFON = True, False
 
 brightness_scale = 64
-lastid: str|None = None
-pixels: neopixel.NeoPixel|None = None
+pixels: NeoPixel|None = None
 serial: busio.UART|None = None
 actled: DigitalInOut|None = None
 errled: DigitalInOut|None = None
 selected: dict[str, Any] = {}
-offat: dict[DigitalInOut, int] = {}
-sd: sdcardio.SDCard|None = None
-color_to_indexes: dict[str, Collection[int]] = {
-  'red': (0,),
-  'green': (1,),
-  'blue': (2,),
-  'white': range(3),
-}
-
 anim: dict[str, Any] = {}
+sd = SDcard(
+  getattr(board, settings.sd_cs_pin),
+  enabled=settings.sd_enabled)
 
 def main() -> None:
   try:
@@ -57,25 +55,26 @@ def main() -> None:
     deinit()
 
 def init() -> None:
-  global actled, errled, lastid, pixels, serial
+  global actled, errled, pixels, serial
   serial = busio.UART(
     None,
     board.RX,
-    baudrate=baudrate,
-    timeout=serial_timeout)
+    baudrate=settings.baudrate,
+    timeout=settings.serial_timeout)
   pixels = neopixel.NeoPixel(
-      getattr(board, data_pin),
-      num_pixels,
-      brightness=initial_brightness / brightness_scale,
-      auto_write=False,
-      pixel_order=pixel_order)
-  actled = init_led(board.LED_GREEN)
-  errled = init_led(board.LED_BLUE)
-  init_sdcard()
-  do_state_restore()
+    getattr(board, settings.data_pin),
+    settings.num_pixels,
+    brightness=settings.initial_brightness / brightness_scale,
+    auto_write=False,
+    pixel_order=settings.pixel_order)
+  actled = Led.init(board.LED_GREEN)
+  errled = Led.init(board.LED_BLUE)
+  sd.init()
   selected['pixel'] = None
   selected['hue'] = None
-  lastid = None
+  Command.init(serial, pixels)
+  State.init(sd, pixels)
+  State.restore(0)
 
 def deinit() -> None:
   if serial:
@@ -86,382 +85,394 @@ def deinit() -> None:
     actled.deinit()
   if errled:
     errled.deinit()
-  deinit_sdcard()
+  sd.deinit()
+  Command.deinit()
+  State.deinit()
+  anim.clear()
+  Led.offat.clear()
 
 def loop() -> None:
-  cmdstr = read_cmdstr()
+  cmdstr = Command.read()
   if not cmdstr:
-    anim_check()
-    flash_check()
+    Anim.run()
+    Led.run()
     return
-  flash(actled)
+  Led.flash(actled)
   print(f'{cmdstr=}')
   try:
-    cmd = parse_command(cmdstr)
+    cmd = Command.parse(cmdstr)
     print(f'{cmd=}')
     if cmd[0] != 'brightness':
       anim.clear()
-    do_command(*cmd)
+    Command.do(*cmd)
   except Exception as err:
     traceback.print_exception(err)
-    flash(errled)
+    Led.flash(errled)
 
-def read_cmdstr() -> str|None:
-  global lastid
-  cmdstr = serial.in_waiting and serial.readline()
-  if cmdstr:
+class Command:
+
+  serial: busio.UART
+  pixels: NeoPixel
+  lastid: str|None
+
+  @classmethod
+  def init(self, serial: busio.UART, pixels: NeoPixel) -> None:
+    self.serial = serial
+    self.pixels = pixels
+    self.lastid = None
+
+  @classmethod
+  def deinit(self) -> None:
+    pass
+
+  @classmethod
+  def read(self) -> str|None:
+    cmdstr = self.serial.in_waiting and self.serial.readline()
+    if cmdstr:
       cmdstr = cmdstr.strip(b'\x00')
       try:
         cmdstr = str(cmdstr, 'utf-8').strip()
       except UnicodeError as err:
         traceback.print_exception(err)
-        cmdstr = None
+        Led.flash(errled)
+        return
       if cmdstr:
-        if cmdstr[0] == lastid:
+        if cmdstr[0] == self.lastid:
           cmdstr = None
         else:
-          lastid = cmdstr[0]
+          self.lastid = cmdstr[0]
           cmdstr = cmdstr[1:]
-      else:
-        flash(errled)
-  return cmdstr or None
+          print(f'cmdid={self.lastid}')
+    return cmdstr or None
 
-def parse_command(cmdstr: str) -> tuple[str, str, int|None]:
-  what, verb = actions[cmdstr[0]]
-  if len(cmdstr) == 1 or verb == 'clear':
-    quantity = None
-  else:
-    quantity = int(cmdstr[1:])
-  return what, verb, quantity
-
-def do_command(what: str, verb: str, quantity: int|None) -> None:
-  action = (what, verb)
-  if action not in codes:
-    raise ValueError(action)
-  if what == 'func':
-    if verb == 'draw':
-      pixels.show()
-    elif verb == 'save':
-      do_state_save(quantity)
-    elif verb == 'restore':
-      do_state_restore(quantity)
-    elif verb == 'run':
-      do_run(quantity)
-    elif verb == 'noop':
-      pass
+  @classmethod
+  def parse(self, cmdstr: str) -> tuple[str, str, int|None]:
+    what, verb = actions[cmdstr[0]]
+    if len(cmdstr) == 1:
+      quantity = None
     else:
-      raise ValueError(verb)
-  elif what == 'pixel':
-    do_pixel_select(verb, quantity)
-  elif what == 'hue':
-    do_hue_change(verb, quantity)
-  elif what == 'brightness':
-    do_brightness_change(verb, quantity)
-  elif what in color_to_indexes:
-    do_color_change(what, verb, quantity)
-  else:
-    raise ValueError(what)
+      quantity = int(cmdstr[1:])
+    return what, verb, quantity
 
-def do_pixel_select(verb: str, quantity: int|None) -> None:
-  value = resolve_index_change(verb, quantity, selected['pixel'], num_pixels)
-  selected['pixel'] = value
-  selected['hue'] = None
-  print(f'{selected=}')
+  @classmethod
+  def do(self, what: str, verb: str, quantity: int|None) -> None:
+    action = (what, verb)
+    if action not in codes:
+      raise ValueError(action)
+    if what in Change.whats:
+      getattr(Change, what)(verb, quantity)
+    elif what == 'state':
+      if not State.action(verb, quantity):
+        Led.flash(errled)
+      if verb == 'restore':
+        selected['hue'] = None
+    elif verb == 'run':
+      if what == 'func_draw':
+        self.pixels.show()
+      elif what == 'func_noop':
+        pass
+      elif what in Anim.routines:
+        getattr(Anim, what)(quantity)
+      else:
+        raise ValueError(action)
+    else:
+      raise ValueError(action)
 
-def do_hue_change(verb: str, quantity: int|None) -> None:
-  if selected['pixel'] is None:
-    prange = range(num_pixels)
-  else:
-    prange = (selected['pixel'],)
-  if selected['hue'] is None and quantity is not None:
-    current = rgbutil.wheel_reverse(*pixels[next(iter(prange))])
-  else:
-    current = selected['hue']
-  value = resolve_index_change(verb, quantity, current, 0x100)
-  hue = rgbutil.as_tuple(colorwheel(value or 0))
-  if selected['pixel'] is None:
-    prange = range(num_pixels)
-  else:
-    prange = (selected['pixel'],)
-  for p in prange:
-    pixels[p] = hue
-  pixels.show()
-  selected['hue'] = value
-  print(f'{selected=}')
+class Change:
 
-def do_brightness_change(verb: str, quantity: int|None) -> None:
-  if verb == 'clear' or quantity is None:
-    value = initial_brightness
-  elif verb == 'set':
-    value = quantity
-  elif verb == 'minus':
-    value = ceil(pixels.brightness * brightness_scale) - quantity
-  else:
-    value = int(pixels.brightness * brightness_scale) + quantity
-  value = max(0, min(brightness_scale, value)) / brightness_scale
-  change = value != pixels.brightness
-  print(f'brightness={pixels.brightness} {change=}')
-  if change:
-    pixels.brightness = value
+  whats = (
+    'pixel',
+    'hue',
+    'brightness',
+    'red',
+    'green',
+    'blue',
+    'white')
+
+  def pixel(verb: str, quantity: int|None) -> None:
+    value = Change.index_resolve(verb, quantity, selected['pixel'], pixels.n)
+    selected['pixel'] = value
+    selected['hue'] = None
+    print(f'{selected=}')
+
+  def hue(verb: str, quantity: int|None) -> None:
+    prange = Change.prange()
+    if selected['hue'] is None and quantity is not None:
+      current = rgbutil.wheel_reverse(*pixels[next(iter(prange))])
+    else:
+      current = selected['hue']
+    value = Change.index_resolve(verb, quantity, current, 0x100)
+    hue = rgbutil.as_tuple(colorwheel(value or 0))
+    for p in prange:
+      pixels[p] = hue
     pixels.show()
+    selected['hue'] = value
+    print(f'{selected=}')
 
-def do_color_change(color: str, verb: str, quantity: int|None) -> None:
-  indexes = color_to_indexes[color]
-  if selected['pixel'] is None:
-    prange = range(num_pixels)
-  else:
-    prange = (selected['pixel'],)
-  if quantity is not None:
-    if verb == 'minus':
-      quantity *= -1
-  change = False
-  initial = rgbutil.as_tuple(initial_color)
-  for p in prange:
-    values = list(pixels[p])
-    pchange = False
-    for b in indexes:
-      if verb == 'clear' or quantity is None:
-        value = initial[b]
-      elif verb == 'set':
+  def brightness(verb: str, quantity: int|None) -> None:
+    if verb == 'clear':
+      value = settings.initial_brightness
+    elif verb == 'set':
+      value = quantity
+    elif verb == 'minus':
+      value = ceil(pixels.brightness * brightness_scale) - quantity
+    else:
+      value = int(pixels.brightness * brightness_scale) + quantity
+    value = max(0, min(brightness_scale, value)) / brightness_scale
+    change = value != pixels.brightness
+    print(f'brightness={pixels.brightness} {change=}')
+    if change:
+      pixels.brightness = value
+      pixels.show()
+
+  def color(color: str, indexes: Collection[int]):
+    def wrapper(verb: str, quantity: int|None) -> None:
+      if quantity is not None:
+        if verb == 'minus':
+          quantity *= -1
+      change = False
+      initial = rgbutil.as_tuple(settings.initial_color)
+      for p in Change.prange():
+        values = list(pixels[p])
+        pchange = False
+        for b in indexes:
+          if verb == 'clear' or quantity is None:
+            value = initial[b]
+          elif verb == 'set':
+            value = quantity
+          else:
+            value = values[b] + quantity
+          value = max(0, min(0xff, value))
+          pchange |= values[b] != value
+          values[b] = value
+        if pchange:
+          pixels[p] = tuple(values)
+          change = True
+          print(f'{p=} {pixels[p]}')
+      if change:
+        pixels.show()
+      selected['hue'] = None
+    return wrapper
+
+  red = color('red', (0,))
+  green = color('green', (1,))
+  blue = color('blue', (2,))
+  white = color('white', range(3))
+
+  del(color)
+
+  def prange() -> Collection[int]:
+    if selected['pixel'] is None:
+      return range(pixels.n)
+    return (selected['pixel'],)
+
+  def index_resolve(verb: str, quantity: int|None, current: int|None, length: int) -> int|None:
+    if verb == 'clear' or quantity is None:
+      value = None
+    elif verb == 'set':
+      if quantity < 0:
+        quantity += length
+      if 0 <= quantity < length:
         value = quantity
       else:
-        value = values[b] + quantity
-      value = max(0, min(0xff, value))
-      pchange |= values[b] != value
-      values[b] = value
-    if pchange:
-      pixels[p] = tuple(values)
-      change = True
-      print(f'{p=} {pixels[p]}')
-  if change:
-    pixels.show()
-  selected['hue'] = None
+        raise IndexError(quantity)
+    else:
+      value = current
+      if verb == 'minus':
+        quantity *= -1
+      if value is None:
+        value = 0
+        if quantity > 0:
+          quantity -= 1
+      value += quantity
+      value = absindex(value, length)
+    return value
 
-def do_state_save(index: int|None = None) -> bool:
-  if not (sd_enabled and check_init_sdcard()):
-    return False
-  name = 'state'
-  if index is not None:
-    name = f'{name}_{index}'
-  text = '\n'.join(state_pack())
-  try:
-    with open(f'/sd/{name}', 'w') as file:
-      file.write(text)
-  except OSError as err:
-    traceback.print_exception(err)
-    return False
-  return True
+class State:
 
-def do_state_restore(index: int|None = None) -> bool:
-  selected['hue'] = None
-  state = state_read(index)
-  if not state:
-    pixels.fill(initial_color)
-    pixels.show()
-    return False
-  change = False
-  values = state[1]
-  length = len(values)
-  for p in range(num_pixels):
-    value = values[absindex(p, length)]
-    if change or pixels[p] != value:
-      change = True
-      pixels[p] = value
-  if change:
-    pixels.show()
-  return True
+  actions = 'restore', 'save', 'clear'
+  subdir = 'states'
 
-def do_run(index: int|None = None):
-  if index is None:
-    anim.clear()
-  elif index == 1 or index == 2:
-    path = (0xff0000, 0x00ff00, 0x0000ff, 0xff0000)
-    steps = 0x100 * (3 if index == 1 else 1)
-    interval = anim_slow if index == 1 else anim_fast
-    it = rgbutil.transition(path, steps=steps, repeat=True)
+  @classmethod
+  def init(self, sd: SDcard, pixels: NeoPixel) -> None:
+    self.sd = sd
+    self.pixels = pixels
+
+  @classmethod
+  def deinit(self) -> None:
+    pass
+
+  @classmethod
+  def action(self, verb: str, index: int) -> bool:
+    if verb in self.actions:
+      func = getattr(State, verb)
+    else:
+      raise ValueError(verb)
+    return bool(func(index))
+
+  @classmethod
+  def restore(self, index: int) -> bool:
+    values = self.read(index)
+    if not values:
+      self.pixels.fill(settings.initial_color)
+      self.pixels.show()
+      return False
+    change = False
+    length = len(values)
+    for p in range(self.pixels.n):
+      value = values[absindex(p, length)]
+      if change or self.pixels[p] != value:
+        change = True
+        self.pixels[p] = value
+    if change:
+      self.pixels.show()
+    return True
+
+  @classmethod
+  def save(self, index: int) -> bool:
+    if not self.sd.mkdirp(self.subdir):
+      return False
+    text = '\n'.join(self.pack())
+    try:
+      with open(self.file(index), 'w') as file:
+        file.write(text)
+    except OSError as err:
+      traceback.print_exception(err)
+      return False
+    return True
+
+  @classmethod
+  def clear(self, index: int) -> bool:
+    if not self.sd.check():
+      return False
+    try:
+      os.remove(self.file(index))
+    except OSError as err:
+      if err.errno != 2:
+        traceback.print_exception(err)
+        return False
+    return True
+
+  @classmethod
+  def read(self, index: int) -> tuple[int, tuple[int, ...]]|None:
+    if self.sd.check():
+      try:
+        with open(self.file(index)) as file:
+          text = file.read().strip()
+        return tuple(self.unpack(text.splitlines()))
+      except (OSError, ValueError) as err:
+        traceback.print_exception(err)
+
+  @classmethod
+  def pack(self) -> Iterator[str]:
+    return map(hex, map(rgbutil.as_int, self.pixels))
+
+  @classmethod
+  def unpack(self, packed: Iterable[str]) -> Iterator[tuple[int, int, int]]:
+    for i, line in enumerate(packed):
+      if i >= self.pixels.n:
+        break
+      if line.startswith('0x'):
+        value = rgbutil.as_tuple(int(line))
+      else:
+        value = tuple(map(int, line.split(',', 2)))
+      yield value
+
+  @classmethod
+  def file(self, index: int) -> str:
+    return f'{self.sd.path}/{self.subdir}/s{index:03}'
+
+class Anim:
+
+  speeds = settings.anim_speeds
+  types = 'fill', 'each'
+  routines = 'anim_wheel_loop', 'anim_state_loop'
+
+  def run():
+    if not (anim and ticks_diff(ticks_ms(), anim['at']) >= 0):
+      return
+    if anim['type'] not in Anim.types:
+      raise ValueError(anim['type'])
+    func = getattr(Anim, anim['type'])
+    try:
+      func()
+    except StopIteration:
+      anim.clear()
+    else:
+      anim['at'] = ticks_add(anim['at'], anim['interval'])
+
+  def fill():
+    value = next(anim['it'])
+    if value != anim.get('current'):
+      pixels.fill(value)
+      pixels.show()
+    anim['current'] = value
+
+  def each():
+    change = False
+    for p, it in enumerate(anim['its']):
+      value = next(it)
+      if change or pixels[p] != value:
+        change = True
+        pixels[p] = value
+    if change:
+      pixels.show()
+
+  def anim_wheel_loop(speed: int) -> None:
     anim.update(
       type='fill',
       at=ticks_ms(),
-      interval=interval,
-      it=it,
-      current=None)
-  elif index in range(3, 6):
-    steps = 0x100 * (6 - index)
-    if index == 3:
-      interval = anim_slow
-    elif index == 4:
-      interval = anim_medium
-    else:
-      interval = anim_fast
-    state_indexes = (None,) + tuple(range(1, 6))
-    states = tuple(filter(None, map(state_read, state_indexes)))
-    if len(states) > 1:
-      its = tuple(
-        rgbutil.transition(
-          tuple(state[1][p] for state in states) + (states[0][1][p],),
-          steps=steps,
-          repeat=True)
-        for p in range(num_pixels))
-      anim.update(
-        type='each',
-        at=ticks_ms(),
-        interval=interval,
-        its=its)
+      interval=Anim.speeds[speed],
+      it=rgbutil.transitions(
+        path=(0xff0000, 0xff00, 0xff),
+        steps=0x100 * (speed + 1),
+        loop=True))
 
-def state_read(index: int|None = None) -> tuple[int, tuple[int, ...]]|None:
-  if not (sd_enabled and check_init_sdcard()):
-    return
-  name = 'state'
-  if index is not None:
-    name = f'{name}_{index}'
-  try:
-    with open(f'/sd/{name}') as file:
-      text = file.read().strip()
-  except OSError as err:
-    traceback.print_exception(err)
-    return
-  try:
-    brightness, *values = state_unpack(text.splitlines())
-  except ValueError as err:
-    traceback.print_exception(err)
-    return
-  return brightness, values
+  def anim_state_loop(speed: int) -> None:
+    states = tuple(filter(None, map(State.read, range(6))))
+    if len(states) < 2:
+      raise ValueError('not enough states')
+    anim.update(
+      type='each',
+      at=ticks_ms(),
+      interval=Anim.speeds[speed],
+      its=tuple(
+        rgbutil.transitions(
+          tuple(state[1][p] for state in states),
+          steps=0x100 * (speed + 1),
+          loop=True)
+        for p in range(pixels.n)))
 
-def state_pack() -> Iterator[str]:
-  yield str(int(pixels.brightness * brightness_scale))
-  for value in pixels:
-    yield ','.join(map(str, value))
+class Led:
 
-def state_unpack(packed: Iterable[str]):
-  it = iter(packed)
-  try:
-    yield int(next(it))
-  except StopIteration:
-    raise ValueError
-  for i, line in enumerate(it):
-    if i >= num_pixels:
-      break
-    value = tuple(map(int, line.split(',')))
-    if len(value) == 1:
-      value = rgbutil.as_tuple(value[0])
-    if len(value) != pixels.bpp:
-      raise ValueError(value)
-    yield value
+  offat: dict[DigitalInOut, int] = {}
 
-def resolve_index_change(verb: str, quantity: int|None, current: int|None, length: int) -> int|None:
-  if verb == 'clear' or quantity is None:
-    value = None
-  elif verb == 'set':
-    if quantity < 0:
-      quantity += length
-    if 0 <= quantity < length:
-      value = quantity
-    else:
-      raise IndexError(quantity)
-  else:
-    value = current
-    if verb == 'minus':
-      quantity *= -1
-    if value is None:
-      value = 0
-      if quantity > 0:
-        quantity -= 1
-    value += quantity
-    value = absindex(value, length)
-  return value
+  def init(pin: Pin) -> DigitalInOut:
+    led = DigitalInOut(pin)
+    led.direction = Direction.OUTPUT
+    led.value = OFF
+    return led
 
-def init_led(pin: Pin) -> DigitalInOut:
-  led = DigitalInOut(pin)
-  led.direction = Direction.OUTPUT
-  led.value = OFF
-  return led
+  def flash(io: DigitalInOut, ms: int = 100) -> None:
+    io.value = ON
+    Led.offat[io] = ticks_add(ticks_ms(), ms)
 
-def flash(io: DigitalInOut, ms: int = 100) -> None:
-  io.value = ON
-  offat[io] = ticks_add(ticks_ms(), ms)
-
-def flash_check() -> None:
-  rem: set|None = None
-  for io in offat:
-    if io.value is ON and ticks_diff(ticks_ms(), offat[io]) >= 0:
-      io.value = OFF
-      rem = rem or set()
-      rem.add(io)
-  if rem:
-    for io in rem:
-      del(offat[io])
-
-def check_init_sdcard() -> bool:
-  if sd:
-    try:
-      open('/sd/.mountcheck').close()
-      return True
-    except OSError:
-      pass
-  return init_sdcard()
-
-def init_sdcard() -> bool:
-  if not sd_enabled:
-    return False
-  global sd
-  deinit_sdcard()
-  try:
-    sd = sdcardio.SDCard(board.SPI(), getattr(board, sd_cs_pin))
-    storage.mount(storage.VfsFat(sd), '/sd')
-    open('/sd/.mountcheck', 'w').close()
-  except OSError as err:
-    traceback.print_exception(err)
-    deinit_sdcard()
-    return False
-  return True
-
-def deinit_sdcard() -> None:
-  global sd
-  if sd:
-    try:
-      storage.umount('/sd')
-    except OSError:
-      pass
-    sd.deinit()
-    sd = None
+  def run() -> None:
+    rem: set|None = None
+    for io in Led.offat:
+      if io.value is ON and ticks_diff(ticks_ms(), Led.offat[io]) >= 0:
+        io.value = OFF
+        rem = rem or set()
+        rem.add(io)
+    if rem:
+      for io in rem:
+        del(Led.offat[io])
 
 def absindex(i: int, length: int) -> int:
   try:
     return i - (length * (i // length))
   except ZeroDivisionError:
     raise IndexError
-
-def anim_check():
-  if not (anim and ticks_diff(ticks_ms(), anim['at']) >= 0):
-    return
-  try:
-    if anim['type'] == 'fill':
-      _anim_fill()
-    elif anim['type'] == 'each':
-      _anim_each()
-    else:
-      raise ValueError(anim['type'])
-  except StopIteration:
-    anim.clear()
-  else:
-    anim['at'] = ticks_add(anim['at'], anim['interval'])
-
-def _anim_fill():
-  value = next(anim['it'])
-  if value != anim['current']:
-    pixels.fill(value)
-    pixels.show()
-  anim['current'] = value
-
-def _anim_each():
-  change = False
-  for p, it in enumerate(anim['its']):
-    value = next(it)
-    if change or pixels[p] != value:
-      change = True
-      pixels[p] = value
-  if change:
-    pixels.show()
 
 if __name__ == '__main__':
   main()

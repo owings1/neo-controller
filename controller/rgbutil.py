@@ -13,6 +13,15 @@ def as_tuple(value: int|tuple) -> tuple[int, int, int]:
   b = value & 0xff
   return r, g, b
 
+def as_int(value: int|tuple[int, int, int]) -> int:
+  if isinstance(value, int):
+    return value
+  r, g, b = value
+  return (
+    ((r & 0xff) << 16) +
+    ((g & 0xff) << 8) +
+    ((b & 0xff)))
+
 def wheel_reverse(*rgb: int) -> int:
   rgb = list(rgb)
   if all(rgb):
@@ -38,9 +47,10 @@ def wheel_reverse(*rgb: int) -> int:
     return rgb[2] // 3 + 85
   return rgb[0] // 3 + 170
 
-def transition(path: Sequence[int|tuple[int, int, int]], steps: int, repeat: bool = False):
+def transitions(path: Sequence[int|tuple[int, int, int]], steps: int, loop: bool = False):
   if len(path) < 2:
     raise ValueError(path)
+  path = tuple(map(as_tuple, path))
   while True:
     trail = iter(path)
     start = next(trail)
@@ -49,19 +59,21 @@ def transition(path: Sequence[int|tuple[int, int, int]], steps: int, repeat: boo
         end = next(trail)
       except StopIteration:
         break
-      yield from trans_gen(start, end, steps)
+      yield from transition(start, end, steps)
       start = end
-    if not repeat:
+    if not loop:
       break
+    end = next(iter(path))
+    yield from transition(start, end, steps)
 
-def trans_gen(start: int|tuple[int, int, int], end: int|tuple[int, int, int], steps: int):
+def transition(start: int|tuple[int, int, int], end: int|tuple[int, int, int], steps: int):
   if steps < 1:
     raise ValueError(steps)
   start = as_tuple(start)
   end = as_tuple(end)
+  # print(f'{start=} {end=}')
   diffs = tuple(b - a for (a, b) in zip(start, end))
   incs = tuple(diff / steps for diff in diffs)
-  # print(f'{start=} {end=} {diffs=} {incs=}')
   yield start
   for step in range(1, steps - 1):
     yield tuple(map(round, (a + inc * step for (a, inc) in zip(start, incs))))
