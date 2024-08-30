@@ -168,7 +168,7 @@ def get_meta_command(verb: str, label: str) -> tuple[str, str, int|None]:
   fnum = fnums[label]
   if verb == 'run':
     what, quantity = run_presets[fnum]
-  elif ('state', verb) in codes:
+  elif ('state', verb) in CODES:
     what = 'state'
     quantity = fnum
   else:
@@ -194,7 +194,7 @@ def do_select_color(verb: str) -> None:
 
 def send_command(what: str, verb: str, quantity: int|None) -> None:
   flash(actled)
-  cmdstr = codes[what, verb]
+  cmdstr = CODES[what, verb]
   if quantity is not None:
     cmdstr += str(quantity)
   cmd = f'{next(idgen)}{cmdstr}\n'.encode()

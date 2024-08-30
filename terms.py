@@ -1,4 +1,4 @@
-actions = {
+ACTIONS = {
   'a': ('brightness', 'set'),
   'b': ('brightness', 'plus'),
   'c': ('brightness', 'minus'),
@@ -36,4 +36,4 @@ actions = {
   'I': ('anim_state_loop', 'run'),
 }
 
-codes = dict(map(reversed, actions.items()))
+CODES = dict(map(reversed, ACTIONS.items()))
