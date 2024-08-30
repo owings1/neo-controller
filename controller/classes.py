@@ -1,32 +1,30 @@
 from __future__ import annotations
 
-import traceback
-
-try:
-  from typing import Iterable, Iterator, TypeAlias
-except ImportError:
-  ColorType = tuple
-else:
-  ColorType: TypeAlias = int|tuple[int, int, int]
 import os
+import traceback
 from collections import namedtuple
 
 import board
 import rgbutil
 import sdcardio
 import storage
-import utils
 from adafruit_ticks import ticks_add, ticks_diff, ticks_ms
 from digitalio import DigitalInOut, Direction
 from microcontroller import Pin
 from neopixel import NeoPixel
 
-class StateManager:
+try:
+  from typing import Iterator
+except ImportError:
+  pass
+
+
+class BufferStore:
 
   actions = 'restore', 'save', 'clear'
 
-  subdir: str = 'states'
-  fallback_color: ColorType = 0xffffff
+  subdir: str = 'buffers'
+  fallback_color: int = 0xffffff
 
   def __init__(self, pixels: NeoPixel, sd: SdReader) -> None:
     self.pixels = pixels
@@ -43,28 +41,14 @@ class StateManager:
     return bool(func(index))
 
   def restore(self, index: int) -> bool:
-    values = self.read(index)
-    if not values:
+    it = self.read(index)
+    if not it:
       self.pixels.fill(self.fallback_color)
       self.pixels.show()
       return False
     change = False
-    srcstop = None
-    it = iter(values)
-    for p in range(self.pixels.n):
-      if srcstop is None:
-        try:
-          value = next(it)
-        except StopIteration:
-          srcstop = p
-      if srcstop is not None:
-        if srcstop == 0:
-          # Edge case of empty values
-          value = self.fallback_color
-        else:
-          # Use relative index already written
-          value = self.pixels[utils.absindex(p, srcstop)]
-      if change or self.pixels[p] != value:
+    for p, value in enumerate(it):
+      if change or self.pixels[p] != rgbutil.as_tuple(value):
         change = True
         self.pixels[p] = value
     if change:
@@ -74,10 +58,12 @@ class StateManager:
   def save(self, index: int) -> bool:
     if not self.sd.mkdirp(self.subdir):
       return False
-    text = '\n'.join(self.pack())
     try:
       with open(self.file(index), 'w') as file:
-        file.write(text)
+        for p, value in enumerate(self.pixels):
+          if p:
+            file.write('\n')
+          file.write(hex(rgbutil.as_int(value)))
     except OSError as err:
       traceback.print_exception(err)
       return False
@@ -94,27 +80,37 @@ class StateManager:
         return False
     return True
 
-  def read(self, index: int) -> Iterator[ColorType]|None:
+  def has(self, index: int) -> bool:
     if self.sd.checkmount():
       try:
-        with open(self.file(index)) as file:
-          text = file.read().strip()
-        return self.unpack(text.splitlines())
-      except (OSError, ValueError) as err:
+        next(self._reader(self.file(index), 1))
+      except (OSError, ValueError, StopIteration) as err:
         traceback.print_exception(err)
-
-  def pack(self) -> Iterator[str]:
-    return map(hex, map(rgbutil.as_int, self.pixels))
-
-  def unpack(self, packed: Iterable[str]) -> Iterator[ColorType]:
-    for i, line in enumerate(packed):
-      if i >= self.pixels.n:
-        break
-      if line.startswith('0x'):
-        value = rgbutil.as_tuple(int(line))
       else:
-        value = tuple(map(int, line.split(',', 2)))
-      yield value
+        return True
+    return False
+
+  def read(self, index: int) -> Iterator[int]|None:
+    if self.pixels.n > 0 and self.has(index):
+        return self._reader(self.file(index), self.pixels.n)
+
+  def _reader(self, file: str, stop: int) -> Iterator[int]:
+    i = 0
+    with open(file) as f:
+      while True:
+        line = f.readline()
+        while line:
+          line = line.strip()
+          if line:
+            yield int(line)
+            i += 1
+            if i == stop:
+              return
+          line = f.readline()
+        if i == 0:
+          # empty file
+          return
+        f.seek(0)
 
   def file(self, index: int) -> str:
     return f'{self.sd.path}/{self.subdir}/s{index:03}'
@@ -128,7 +124,7 @@ class SdReader:
   def checkfile(self) -> str:
     return f'{self.path}/.mountcheck'
 
-  def __init__(self, cs: Pin, *, path: str = '/sd',) -> None:
+  def __init__(self, cs: Pin, *, path: str = '/sd') -> None:
     self.cs = cs
     self.path = path
     self.card = None

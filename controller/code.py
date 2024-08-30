@@ -12,15 +12,15 @@ else:
   import defaults
   import defaults as settings
 
+import math
 import traceback
 
 import board
 import busio
-import math
 import rgbutil
 import utils
 from adafruit_ticks import ticks_add, ticks_diff, ticks_ms
-from classes import ActLeds, SdReader, StateManager
+from classes import ActLeds, BufferStore, SdReader
 from neopixel import NeoPixel
 from rainbowio import colorwheel
 
@@ -32,7 +32,7 @@ pixels: NeoPixel|None = None
 sd: SdReader|None = None
 serial: busio.UART|None = None
 leds: ActLeds|None = None
-state_mgr: StateManager|None = None
+bufstore: BufferStore|None = None
 selected: dict[str, Any] = {}
 anim: dict[str, Any] = {}
 
@@ -45,7 +45,7 @@ def main() -> None:
     deinit()
 
 def init() -> None:
-  global pixels, sd, state_mgr, serial, leds
+  global pixels, sd, bufstore, serial, leds
   pixels = NeoPixel(
     getattr(board, settings.data_pin),
     settings.num_pixels,
@@ -55,8 +55,9 @@ def init() -> None:
   sd = SdReader(getattr(board, settings.sd_cs_pin))
   sd.enabled = settings.sd_enabled
   sd.remount()
-  state_mgr = StateManager(pixels, sd)
-  state_mgr.fallback_color = settings.initial_color
+  bufstore = BufferStore(pixels, sd)
+  bufstore.fallback_color = settings.initial_color
+  AnimManager.init(pixels)
   serial = busio.UART(
     None,
     board.RX,
@@ -66,7 +67,7 @@ def init() -> None:
   selected['pixel'] = None
   selected['hue'] = None
   Command.init(serial, pixels)
-  state_mgr.restore(0)
+  bufstore.restore(0)
 
 def deinit() -> None:
   if serial:
@@ -77,15 +78,16 @@ def deinit() -> None:
     leds.deinit()
   if sd:
     sd.deinit()
-  if state_mgr:
-    state_mgr.deinit()
+  if bufstore:
+    bufstore.deinit()
+  AnimManager.deinit()
   Command.deinit()
   anim.clear()
 
 def loop() -> None:
   cmdstr = Command.read()
   if not cmdstr:
-    Anim.run()
+    AnimManager.run()
     leds.run()
     return
   leds.act.flash()
@@ -153,7 +155,7 @@ class Command:
     if what in Change.whats:
       getattr(Change, what)(verb, quantity)
     elif what == 'state':
-      if not state_mgr.action(verb, quantity):
+      if not bufstore.action(verb, quantity):
         leds.err.flash()
       if verb == 'restore':
         selected['hue'] = None
@@ -162,8 +164,8 @@ class Command:
         self.pixels.show()
       elif what == 'func_noop':
         pass
-      elif what in Anim.routines:
-        getattr(Anim, what)(quantity)
+      elif what in AnimManager.routines:
+        getattr(AnimManager, what)(quantity)
       else:
         raise ValueError(action)
     else:
@@ -279,7 +281,7 @@ class Change:
       value = utils.absindex(value, length)
     return value
 
-class Anim:
+class AnimManager:
 
   speeds = settings.anim_speeds
   types = 'fill', 'each'
@@ -297,9 +299,9 @@ class Anim:
   def run(self):
     if not (anim and ticks_diff(ticks_ms(), anim['at']) >= 0):
       return
-    if anim['type'] not in Anim.types:
+    if anim['type'] not in self.types:
       raise ValueError(anim['type'])
-    func = getattr(Anim, anim['type'])
+    func = getattr(self, anim['type'])
     try:
       func()
     except StopIteration:
@@ -331,7 +333,7 @@ class Anim:
     anim.update(
       type='fill',
       at=ticks_ms(),
-      interval=Anim.speeds[speed],
+      interval=self.speeds[speed],
       it=rgbutil.transitions(
         path=(0xff0000, 0xff00, 0xff),
         steps=0x100 * (speed + 1),
@@ -339,18 +341,18 @@ class Anim:
 
   @classmethod
   def anim_state_loop(self, speed: int) -> None:
-    states = map(state_mgr.read, range(6))
-    states = filter(None, states)
-    states = tuple(map(tuple, states))
-    if len(states) < 2:
-      raise ValueError('not enough states')
+    buffers = map(bufstore.read, range(6))
+    buffers = filter(None, buffers)
+    buffers = tuple(map(tuple, buffers))
+    if len(buffers) < 2:
+      raise ValueError('not enough buffers')
     anim.update(
       type='each',
       at=ticks_ms(),
-      interval=Anim.speeds[speed],
+      interval=self.speeds[speed],
       its=tuple(
         rgbutil.transitions(
-          tuple(values[p] for values in states),
+          tuple(values[p] for values in buffers),
           steps=0x100 * (speed + 1),
           loop=True)
         for p in range(self.pixels.n)))
