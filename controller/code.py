@@ -1,30 +1,22 @@
 from __future__ import annotations
 
-try:
-  from typing import Any, Collection
-except ImportError:
-  import defaults
-  import settings
-  settings.__dict__.update(
-    (name, getattr(settings, name, getattr(defaults, name)))
-    for name in defaults.__dict__)
-else:
-  import defaults
-  import defaults as settings
-
 import math
 import traceback
 
 import board
 import busio
-import rgbutil
 import utils
-from adafruit_ticks import ticks_add, ticks_diff, ticks_ms
-from classes import ActLeds, BufferStore, SdReader
+from classes import *
 from neopixel import NeoPixel
 from rainbowio import colorwheel
+from utils import settings
 
 from terms import *
+
+try:
+  from typing import Any, Collection
+except ImportError:
+  pass
 
 brightness_scale = 64
 
@@ -32,9 +24,9 @@ pixels: NeoPixel|None = None
 sd: SdReader|None = None
 serial: busio.UART|None = None
 leds: ActLeds|None = None
-bufstore: BufferStore|None = None
+bufstore: BufStore|None = None
+animator: Animator|None = None
 selected: dict[str, Any] = {}
-anim: dict[str, Any] = {}
 
 def main() -> None:
   try:
@@ -45,7 +37,7 @@ def main() -> None:
     deinit()
 
 def init() -> None:
-  global pixels, sd, bufstore, serial, leds
+  global animator, pixels, sd, bufstore, serial, leds
   pixels = NeoPixel(
     getattr(board, settings.data_pin),
     settings.num_pixels,
@@ -55,9 +47,9 @@ def init() -> None:
   sd = SdReader(getattr(board, settings.sd_cs_pin))
   sd.enabled = settings.sd_enabled
   sd.remount()
-  bufstore = BufferStore(pixels, sd)
+  bufstore = BufStore(pixels, sd, 6)
   bufstore.fallback_color = settings.initial_color
-  AnimManager.init(pixels)
+  animator = Animator(pixels, bufstore)
   serial = busio.UART(
     None,
     board.RX,
@@ -80,14 +72,14 @@ def deinit() -> None:
     sd.deinit()
   if bufstore:
     bufstore.deinit()
-  AnimManager.deinit()
+  if animator:
+    animator.deinit()
   Command.deinit()
-  anim.clear()
 
 def loop() -> None:
   cmdstr = Command.read()
   if not cmdstr:
-    AnimManager.run()
+    animator.run()
     leds.run()
     return
   leds.act.flash()
@@ -96,7 +88,7 @@ def loop() -> None:
     cmd = Command.parse(cmdstr)
     print(f'{cmd=}')
     if cmd[0] != 'brightness':
-      anim.clear()
+      animator.clear()
     Command.do(*cmd)
   except Exception as err:
     traceback.print_exception(err)
@@ -164,8 +156,8 @@ class Command:
         self.pixels.show()
       elif what == 'func_noop':
         pass
-      elif what in AnimManager.routines:
-        getattr(AnimManager, what)(quantity)
+      elif what in animator.routines:
+        getattr(animator, what)(quantity)
       else:
         raise ValueError(action)
     else:
@@ -191,11 +183,11 @@ class Change:
   def hue(verb: str, quantity: int|None) -> None:
     prange = Change.prange()
     if selected['hue'] is None and quantity is not None:
-      current = rgbutil.wheel_reverse(*pixels[next(iter(prange))])
+      current = utils.unwheel(pixels[next(iter(prange))])
     else:
       current = selected['hue']
     value = Change.index_resolve(verb, quantity, current, 0x100)
-    hue = rgbutil.as_tuple(colorwheel(value or 0))
+    hue = utils.as_tuple(colorwheel(value or 0))
     for p in prange:
       pixels[p] = hue
     pixels.show()
@@ -224,7 +216,7 @@ class Change:
         if verb == 'minus':
           quantity *= -1
       change = False
-      initial = rgbutil.as_tuple(settings.initial_color)
+      initial = utils.as_tuple(settings.initial_color)
       for p in Change.prange():
         values = list(pixels[p])
         pchange = False
@@ -281,81 +273,7 @@ class Change:
       value = utils.absindex(value, length)
     return value
 
-class AnimManager:
 
-  speeds = settings.anim_speeds
-  types = 'fill', 'each'
-  routines = 'anim_wheel_loop', 'anim_state_loop'
-
-  @classmethod
-  def init(self, pixels: NeoPixel) -> None:
-    self.pixels = pixels
-
-  @classmethod
-  def deinit(self) -> None:
-    pass
-
-  @classmethod
-  def run(self):
-    if not (anim and ticks_diff(ticks_ms(), anim['at']) >= 0):
-      return
-    if anim['type'] not in self.types:
-      raise ValueError(anim['type'])
-    func = getattr(self, anim['type'])
-    try:
-      func()
-    except StopIteration:
-      anim.clear()
-    else:
-      anim['at'] = ticks_add(anim['at'], anim['interval'])
-
-  @classmethod
-  def fill(self):
-    value = next(anim['it'])
-    if value != anim.get('current'):
-      self.pixels.fill(value)
-      self.pixels.show()
-    anim['current'] = value
-
-  @classmethod
-  def each(self):
-    change = False
-    for p, it in enumerate(anim['its']):
-      value = next(it)
-      if change or self.pixels[p] != value:
-        change = True
-        self.pixels[p] = value
-    if change:
-      self.pixels.show()
-
-  @classmethod
-  def anim_wheel_loop(self, speed: int) -> None:
-    anim.update(
-      type='fill',
-      at=ticks_ms(),
-      interval=self.speeds[speed],
-      it=rgbutil.transitions(
-        path=(0xff0000, 0xff00, 0xff),
-        steps=0x100 * (speed + 1),
-        loop=True))
-
-  @classmethod
-  def anim_state_loop(self, speed: int) -> None:
-    buffers = map(bufstore.read, range(6))
-    buffers = filter(None, buffers)
-    buffers = tuple(map(tuple, buffers))
-    if len(buffers) < 2:
-      raise ValueError('not enough buffers')
-    anim.update(
-      type='each',
-      at=ticks_ms(),
-      interval=self.speeds[speed],
-      its=tuple(
-        rgbutil.transitions(
-          tuple(values[p] for values in buffers),
-          steps=0x100 * (speed + 1),
-          loop=True)
-        for p in range(self.pixels.n)))
 
 
 if __name__ == '__main__':

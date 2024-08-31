@@ -5,30 +5,33 @@ import traceback
 from collections import namedtuple
 
 import board
-import rgbutil
 import sdcardio
 import storage
+import utils
 from adafruit_ticks import ticks_add, ticks_diff, ticks_ms
 from digitalio import DigitalInOut, Direction
 from microcontroller import Pin
 from neopixel import NeoPixel
+from utils import ColorType, settings
 
 try:
-  from typing import Iterator
+  from typing import Sequence, Iterator
 except ImportError:
   pass
 
 
-class BufferStore:
+class BufStore:
 
   actions = 'restore', 'save', 'clear'
 
   subdir: str = 'buffers'
-  fallback_color: int = 0xffffff
+  fallback_color: ColorType = 0xffffff
 
-  def __init__(self, pixels: NeoPixel, sd: SdReader) -> None:
+  def __init__(self, pixels: NeoPixel, sd: SdReader, size: int) -> None:
     self.pixels = pixels
     self.sd = sd
+    self.size = size
+    self._range = range(self.size)
 
   def deinit(self) -> None:
     pass
@@ -48,7 +51,7 @@ class BufferStore:
       return False
     change = False
     for p, value in enumerate(it):
-      if change or self.pixels[p] != rgbutil.as_tuple(value):
+      if change or self.pixels[p] != utils.as_tuple(value):
         change = True
         self.pixels[p] = value
     if change:
@@ -56,6 +59,8 @@ class BufferStore:
     return True
 
   def save(self, index: int) -> bool:
+    if index not in self._range:
+      raise IndexError
     if not self.sd.mkdirp(self.subdir):
       return False
     try:
@@ -63,13 +68,15 @@ class BufferStore:
         for p, value in enumerate(self.pixels):
           if p:
             file.write('\n')
-          file.write(hex(rgbutil.as_int(value)))
+          file.write(hex(utils.as_int(value)))
     except OSError as err:
       traceback.print_exception(err)
       return False
     return True
 
   def clear(self, index: int) -> bool:
+    if index not in self._range:
+      raise IndexError
     if not self.sd.checkmount():
       return False
     try:
@@ -81,6 +88,8 @@ class BufferStore:
     return True
 
   def has(self, index: int) -> bool:
+    if index not in self._range:
+      return False
     if self.sd.checkmount():
       try:
         next(self._reader(self.file(index), 1))
@@ -113,6 +122,8 @@ class BufferStore:
         f.seek(0)
 
   def file(self, index: int) -> str:
+    if index not in self._range:
+      raise IndexError
     return f'{self.sd.path}/{self.subdir}/s{index:03}'
 
 class SdReader:
@@ -239,3 +250,108 @@ class ActLeds(namedtuple('LedsBase', ('act', 'err'))):
   @staticmethod
   def frompins(*pins) -> ActLeds:
     return ActLeds(*map(Led, pins))
+
+class Animation:
+  interval: int
+  at: int
+
+  def ready(self) -> None:
+    return ticks_diff(ticks_ms(), self.at) >= 0
+
+  def run(self, pixels: NeoPixel) -> None:
+    raise NotImplementedError
+
+class FillAnimation(Animation):
+
+  def __init__(self, it: Iterator[ColorType], interval: int, at: int|None = None) -> None:
+    self.it = it
+    self.interval = interval
+    self.at = ticks_ms() if at is None else at
+    self.current = None
+
+  def run(self, pixels: NeoPixel) -> None:
+    value = next(self.it)
+    if value != self.current:
+      pixels.fill(value)
+      pixels.show()
+      self.current = value
+    self.at = ticks_add(ticks_ms(), self.interval)
+
+class BufAnimation(Animation):
+
+  def __init__(self, its: Sequence[Iterator[ColorType]], interval: int, at: int|None = None) -> None:
+
+    self.its = its
+    self.interval = interval
+    self.at = ticks_ms() if at is None else at
+
+  def run(self, pixels: NeoPixel) -> None:
+    change = False
+    for p, it in enumerate(self.its):
+      value = next(it)
+      if change or pixels[p] != value:
+        change = True
+        pixels[p] = value
+    if change:
+      pixels.show()
+    self.at = ticks_add(ticks_ms(), self.interval)
+
+class Animator:
+
+  speeds = settings.anim_speeds
+  routines = 'anim_wheel_loop', 'anim_state_loop'
+
+  pixels: NeoPixel
+  bufstore: BufStore
+  anim: Animation|None = None
+  
+  def __init__(self, pixels: NeoPixel, bufstore: BufStore) -> None:
+    self.pixels = pixels
+    self.bufstore = bufstore
+
+  def deinit(self) -> None:
+    self.clear()
+
+  def run(self):
+    if self.anim and self.anim.ready():
+      try:
+        self.anim.run()
+      except StopIteration:
+        self.clear()
+
+  def clear(self) -> None:
+    del(self.anim)
+    self.anim = None
+
+  def anim_wheel_loop(self, speed: int) -> None:
+    it=utils.transitions(
+        path=(0xff0000, 0xff00, 0xff),
+        steps=0x100 * (speed + 1),
+        loop=True)
+    self.anim = FillAnimation(it, self.speeds[speed])
+
+  def anim_state_loop(self, speed: int) -> None:
+    bufs = map(self.bufstore.read, range(6))
+    bufs = filter(None, bufs)
+    bufs = tuple(map(tuple, bufs))
+    if len(bufs) < 2:
+      raise ValueError('not enough buffers')
+    its = tuple(
+      utils.transitions(
+        tuple(values[p] for values in bufs),
+        steps=0x100 * (speed + 1),
+        loop=True)
+      for p in range(self.pixels.n))
+    self.anim = BufAnimation(its, self.speeds[speed])
+
+
+__all__ = tuple(cls.__name__ for cls in (
+    BufStore,
+    SdReader,
+    Led,
+    ActLeds,
+    Animation,
+    Animator,
+    FillAnimation,
+    BufAnimation,
+    ))
