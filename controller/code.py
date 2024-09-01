@@ -1,32 +1,20 @@
 from __future__ import annotations
 
-import math
 import traceback
 
 import board
 import busio
-import utils
 from classes import *
 from neopixel import NeoPixel
-from rainbowio import colorwheel
 from utils import settings
 
-from terms import *
-
-try:
-  from typing import Any, Collection
-except ImportError:
-  pass
-
-brightness_scale = 64
-
+animator: Animator|None = None
+bufstore: BufStore|None = None
+commander: Commander|None = None
+leds: ActLeds|None = None
 pixels: NeoPixel|None = None
 sd: SdReader|None = None
 serial: busio.UART|None = None
-leds: ActLeds|None = None
-bufstore: BufStore|None = None
-animator: Animator|None = None
-selected: dict[str, Any] = {}
 
 def main() -> None:
   try:
@@ -37,11 +25,11 @@ def main() -> None:
     deinit()
 
 def init() -> None:
-  global animator, pixels, sd, bufstore, serial, leds
+  global animator, bufstore, commander, leds, pixels, sd, serial
   pixels = NeoPixel(
     getattr(board, settings.data_pin),
     settings.num_pixels,
-    brightness=settings.initial_brightness / brightness_scale,
+    brightness=settings.initial_brightness / settings.brightness_scale,
     auto_write=False,
     pixel_order=settings.pixel_order)
   sd = SdReader(getattr(board, settings.sd_cs_pin))
@@ -56,12 +44,12 @@ def init() -> None:
     baudrate=settings.baudrate,
     timeout=settings.serial_timeout)
   leds = ActLeds.frompins(board.LED_GREEN, board.LED_BLUE)
-  selected['pixel'] = None
-  selected['hue'] = None
-  Command.init(serial, pixels)
+  commander = Commander(serial, pixels, bufstore, animator, leds)
   bufstore.restore(0)
 
 def deinit() -> None:
+  if commander:
+    commander.deinit()
   if serial:
     serial.deinit()
   if pixels:
@@ -74,10 +62,9 @@ def deinit() -> None:
     bufstore.deinit()
   if animator:
     animator.deinit()
-  Command.deinit()
 
 def loop() -> None:
-  cmdstr = Command.read()
+  cmdstr = commander.read()
   if not cmdstr:
     animator.run()
     leds.run()
@@ -85,196 +72,14 @@ def loop() -> None:
   leds.act.flash()
   print(f'{cmdstr=}')
   try:
-    cmd = Command.parse(cmdstr)
+    cmd = commander.parse(cmdstr)
     print(f'{cmd=}')
     if cmd[0] != 'brightness':
       animator.clear()
-    Command.do(*cmd)
+    commander.do(*cmd)
   except Exception as err:
     traceback.print_exception(err)
     leds.err.flash()
-
-class Command:
-
-  serial: busio.UART
-  pixels: NeoPixel
-  lastid: str|None
-
-  @classmethod
-  def init(self, serial: busio.UART, pixels: NeoPixel) -> None:
-    self.serial = serial
-    self.pixels = pixels
-    self.lastid = None
-
-  @classmethod
-  def deinit(self) -> None:
-    pass
-
-  @classmethod
-  def read(self) -> str|None:
-    cmdstr = self.serial.in_waiting and self.serial.readline()
-    if cmdstr:
-      cmdstr = cmdstr.strip(b'\x00')
-      try:
-        cmdstr = str(cmdstr, 'utf-8').strip()
-      except UnicodeError as err:
-        traceback.print_exception(err)
-        leds.err.flash()
-        return
-      if cmdstr:
-        if cmdstr[0] == self.lastid:
-          cmdstr = None
-        else:
-          self.lastid = cmdstr[0]
-          cmdstr = cmdstr[1:]
-          print(f'cmdid={self.lastid}')
-    return cmdstr or None
-
-  @classmethod
-  def parse(self, cmdstr: str) -> tuple[str, str, int|None]:
-    what, verb = ACTIONS[cmdstr[0]]
-    if len(cmdstr) == 1:
-      quantity = None
-    else:
-      quantity = int(cmdstr[1:])
-    return what, verb, quantity
-
-  @classmethod
-  def do(self, what: str, verb: str, quantity: int|None) -> None:
-    action = (what, verb)
-    if action not in CODES:
-      raise ValueError(action)
-    if what in Change.whats:
-      getattr(Change, what)(verb, quantity)
-    elif what == 'state':
-      if not bufstore.action(verb, quantity):
-        leds.err.flash()
-      if verb == 'restore':
-        selected['hue'] = None
-    elif verb == 'run':
-      if what == 'func_draw':
-        self.pixels.show()
-      elif what == 'func_noop':
-        pass
-      elif what in animator.routines:
-        getattr(animator, what)(quantity)
-      else:
-        raise ValueError(action)
-    else:
-      raise ValueError(action)
-
-class Change:
-
-  whats = (
-    'pixel',
-    'hue',
-    'brightness',
-    'red',
-    'green',
-    'blue',
-    'white')
-
-  def pixel(verb: str, quantity: int|None) -> None:
-    value = Change.index_resolve(verb, quantity, selected['pixel'], pixels.n)
-    selected['pixel'] = value
-    selected['hue'] = None
-    print(f'{selected=}')
-
-  def hue(verb: str, quantity: int|None) -> None:
-    prange = Change.prange()
-    if selected['hue'] is None and quantity is not None:
-      current = utils.unwheel(pixels[next(iter(prange))])
-    else:
-      current = selected['hue']
-    value = Change.index_resolve(verb, quantity, current, 0x100)
-    hue = utils.as_tuple(colorwheel(value or 0))
-    for p in prange:
-      pixels[p] = hue
-    pixels.show()
-    selected['hue'] = value
-    print(f'{selected=}')
-
-  def brightness(verb: str, quantity: int|None) -> None:
-    if verb == 'clear':
-      value = settings.initial_brightness
-    elif verb == 'set':
-      value = quantity
-    elif verb == 'minus':
-      value = math.ceil(pixels.brightness * brightness_scale) - quantity
-    else:
-      value = int(pixels.brightness * brightness_scale) + quantity
-    value = max(0, min(brightness_scale, value)) / brightness_scale
-    change = value != pixels.brightness
-    print(f'brightness={pixels.brightness} {change=}')
-    if change:
-      pixels.brightness = value
-      pixels.show()
-
-  def color(color: str, indexes: Collection[int]):
-    def wrapper(verb: str, quantity: int|None) -> None:
-      if quantity is not None:
-        if verb == 'minus':
-          quantity *= -1
-      change = False
-      initial = utils.as_tuple(settings.initial_color)
-      for p in Change.prange():
-        values = list(pixels[p])
-        pchange = False
-        for b in indexes:
-          if verb == 'clear' or quantity is None:
-            value = initial[b]
-          elif verb == 'set':
-            value = quantity
-          else:
-            value = values[b] + quantity
-          value = max(0, min(0xff, value))
-          pchange |= values[b] != value
-          values[b] = value
-        if pchange:
-          pixels[p] = tuple(values)
-          change = True
-          print(f'{p=} {pixels[p]}')
-      if change:
-        pixels.show()
-      selected['hue'] = None
-    return wrapper
-
-  red = color('red', (0,))
-  green = color('green', (1,))
-  blue = color('blue', (2,))
-  white = color('white', range(3))
-
-  del(color)
-
-  def prange() -> Collection[int]:
-    if selected['pixel'] is None:
-      return range(pixels.n)
-    return (selected['pixel'],)
-
-  def index_resolve(verb: str, quantity: int|None, current: int|None, length: int) -> int|None:
-    if verb == 'clear' or quantity is None:
-      value = None
-    elif verb == 'set':
-      if quantity < 0:
-        quantity += length
-      if 0 <= quantity < length:
-        value = quantity
-      else:
-        raise IndexError(quantity)
-    else:
-      value = current
-      if verb == 'minus':
-        quantity *= -1
-      if value is None:
-        value = 0
-        if quantity > 0:
-          quantity -= 1
-      value += quantity
-      value = utils.absindex(value, length)
-    return value
-
-
-
 
 if __name__ == '__main__':
   main()

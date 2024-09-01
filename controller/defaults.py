@@ -8,6 +8,8 @@ initial_brightness = 12
 
 initial_color = 0xffffff
 
+brightness_scale = 64
+
 # Animation speeds
 
 anim_speeds = (
