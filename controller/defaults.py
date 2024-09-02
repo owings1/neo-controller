@@ -1,27 +1,20 @@
 # Runtime Configuration
 
 num_pixels = 7
-
 pixel_order = 'BRG'
+num_presets = 6
+speeds = range(2, 0x82, 2)
 
-initial_brightness = 12
+# Default Settings
 
+brightness_scale = 0x40
+initial_brightness = brightness_scale // 5
 initial_color = 0xffffff
-
-brightness_scale = 64
-
-# Animation speeds
-
-anim_speeds = (
-  10,
-  50,
-  100,
-)
 
 # Serial Configuration
 
 baudrate = 115200
-serial_timeout = 0.1
+serial_timeout = 0.125
 
 # Circuit Configuration
 

@@ -5,8 +5,8 @@ import os
 import traceback
 from collections import namedtuple
 
-import board
 import busio
+import defaults
 import sdcardio
 import storage
 import utils
@@ -15,36 +15,35 @@ from digitalio import DigitalInOut, Direction
 from microcontroller import Pin
 from neopixel import NeoPixel
 from rainbowio import colorwheel
-from utils import ColorType, settings
+from utils import ColorType
 
 import terms
 
 try:
-  from typing import Collection, Iterator, Self, Sequence
+  from typing import ClassVar, Collection, Iterable, Iterator, Self, Sequence
 except ImportError:
   pass
+
+__all__ = (
+'ActLeds',
+'Animator',
+'BufStore',
+'Changer',
+'Commander',
+'SdReader')
 
 class Commander:
 
   serial: busio.UART
-  pixels: NeoPixel
-  bufstore: BufStore
-  animator: Animator
   leds: ActLeds
-  changer: Changer
-  lastid: str|None
+  lastid: str|None = None
 
-  def __init__(self, serial: busio.UART, pixels: NeoPixel, bufstore: BufStore, animator: Animator, leds: ActLeds) -> None:
+  def __init__(self, serial: busio.UART, leds: ActLeds) -> None:
     self.serial = serial
-    self.pixels = pixels
-    self.bufstore = bufstore
-    self.animator = animator
     self.leds = leds
-    self.changer = Changer(self.pixels)
-    self.lastid = None
 
   def deinit(self) -> None:
-    self.changer.deinit()
+    pass
 
   def read(self) -> str|None:
     cmdstr = self.serial.in_waiting and self.serial.readline()
@@ -57,13 +56,14 @@ class Commander:
       traceback.print_exception(err)
       self.leds.err.flash()
       return
-    if cmdstr:
-      if cmdstr[0] == self.lastid:
-        cmdstr = None
-      else:
-        self.lastid = cmdstr[0]
-        cmdstr = cmdstr[1:]
-        print(f'cmdid={self.lastid}')
+    if not cmdstr:
+      return
+    cmdid = cmdstr[0]
+    if cmdid == self.lastid:
+      return
+    print(f'{cmdid=}')
+    cmdstr = cmdstr[1:]
+    self.lastid = cmdid
     return cmdstr or None
 
   def parse(self, cmdstr: str) -> tuple[str, str, int|None]:
@@ -74,32 +74,9 @@ class Commander:
       quantity = int(cmdstr[1:])
     return what, verb, quantity
 
-  def do(self, what: str, verb: str, quantity: int|None) -> None:
-    action = (what, verb)
-    if action not in terms.CODES:
-      raise ValueError(action)
-    if what in self.changer.whats:
-      getattr(self.changer, what)(verb, quantity)
-    elif what == 'state':
-      if not self.bufstore.action(verb, quantity):
-        self.leds.err.flash()
-      if verb == 'restore':
-        self.changer.selected['hue'] = None
-    elif verb == 'run':
-      if what == 'func_draw':
-        self.pixels.show()
-      elif what == 'func_noop':
-        pass
-      elif what in self.animator.routines:
-        getattr(self.animator, what)(quantity)
-      else:
-        raise ValueError(action)
-    else:
-      raise ValueError(action)
-
 class Changer:
 
-  whats = (
+  whats: ClassVar[Collection[str]] = (
     'pixel',
     'hue',
     'brightness',
@@ -107,6 +84,9 @@ class Changer:
     'green',
     'blue',
     'white')
+  brightness_scale: ClassVar[int] = defaults.brightness_scale
+  initial_brightness: ClassVar[int] = defaults.initial_brightness
+  initial_color: ClassVar[ColorType] = defaults.initial_color
 
   pixels: NeoPixel
   selected: dict[str, int|None]
@@ -120,7 +100,7 @@ class Changer:
       self.selected[key] = None
 
   def pixel(self, verb: str, quantity: int|None) -> None:
-    value = self.index_resolve(verb, quantity, self.selected['pixel'], self.pixels.n)
+    value = utils.resolve_index_change(verb, quantity, self.selected['pixel'], self.pixels.n, True)
     self.selected.update(pixel=value, hue=None)
     print(f'selected={self.selected}')
 
@@ -130,7 +110,7 @@ class Changer:
       current = utils.unwheel(self.pixels[next(iter(prange))])
     else:
       current = self.selected['hue']
-    value = self.index_resolve(verb, quantity, current, 0x100)
+    value = utils.resolve_index_change(verb, quantity, current, 0x100, True)
     hue = utils.as_tuple(colorwheel(value or 0))
     for p in prange:
       self.pixels[p] = hue
@@ -140,14 +120,14 @@ class Changer:
 
   def brightness(self, verb: str, quantity: int|None) -> None:
     if verb == 'clear':
-      value = settings.initial_brightness
+      value = self.initial_brightness
     elif verb == 'set':
       value = quantity
     elif verb == 'minus':
-      value = math.ceil(self.pixels.brightness * settings.brightness_scale) - quantity
+      value = math.ceil(self.pixels.brightness * self.brightness_scale) - quantity
     else:
-      value = int(self.pixels.brightness * settings.brightness_scale) + quantity
-    value = max(0, min(settings.brightness_scale, value)) / settings.brightness_scale
+      value = int(self.pixels.brightness * self.brightness_scale) + quantity
+    value = max(0, min(self.brightness_scale, value)) / self.brightness_scale
     change = value != self.pixels.brightness
     print(f'brightness={self.pixels.brightness} {change=}')
     if change:
@@ -160,7 +140,7 @@ class Changer:
         if verb == 'minus':
           quantity *= -1
       change = False
-      initial = utils.as_tuple(settings.initial_color)
+      initial = utils.as_tuple(self.initial_color)
       for p in self.prange():
         values = list(self.pixels[p])
         pchange = False
@@ -195,41 +175,102 @@ class Changer:
       return range(self.pixels.n)
     return (self.selected['pixel'],)
 
-  @staticmethod
-  def index_resolve(verb: str, quantity: int|None, current: int|None, length: int) -> int|None:
-    if verb == 'clear' or quantity is None:
-      value = None
-    elif verb == 'set':
-      if quantity < 0:
-        quantity += length
-      if 0 <= quantity < length:
-        value = quantity
-      else:
-        raise IndexError(quantity)
-    else:
-      value = current
-      if verb == 'minus':
-        quantity *= -1
-      if value is None:
-        value = 0
-        if quantity > 0:
-          quantity -= 1
-      value += quantity
-      value = utils.absindex(value, length)
-    return value
+class Animator:
+
+  speeds: ClassVar[Sequence[int]] = defaults.speeds
+  routines: ClassVar[Sequence[str]] = (
+    'anim_wheel_loop',
+    'anim_buffers_loop',
+    'anim_marquee_loop')
+
+  pixels: NeoPixel
+  bufstore: BufStore
+  anim: Animation|None = None
+  _speed: int
+  
+  def __init__(self, pixels: NeoPixel, bufstore: BufStore) -> None:
+    self.pixels = pixels
+    self.bufstore = bufstore
+    self.speed = len(self.speeds) // 2
+
+  @property
+  def speed(self) -> int:
+    return self._speed
+
+  @speed.setter
+  def speed(self, value: int) -> None:
+    self._speed = max(0, min(value, len(self.speeds) - 1))
+    if self.anim:
+      self.anim.interval = self.speeds[self._speed]
+
+  def deinit(self) -> None:
+    self.clear()
+
+  def run(self):
+    if self.anim:
+      try:
+        self.anim.run()
+      except StopIteration:
+        self.clear()
+
+  def speed_change(self, verb: str, quantity: int|None) -> None:
+    self.speed = utils.resolve_index_change(
+      verb,
+      quantity,
+      self.speed,
+      len(self.speeds),
+      False)
+
+  def clear(self) -> None:
+    self.anim = None
+
+  def anim_wheel_loop(self) -> None:
+    self.anim = FillAnimation(
+      self.pixels,
+      path=utils.repeat((0xff0000, 0xff00, 0xff)),
+      interval=self.speeds[self.speed],
+      steps=0x100)
+    self.anim.start()
+
+  def anim_buffers_loop(self) -> None:
+    bufs = map(self.bufstore.read, self.bufstore.range)
+    bufs = tuple(map(tuple, filter(None, bufs)))
+    if len(bufs) < 2:
+      raise ValueError('not enough buffers')
+    self.anim = BufsAnimation(
+      self.pixels,
+      bufs=utils.repeat(bufs),
+      interval=self.speeds[self.speed],
+      steps=0x100)
+    self.anim.start()
+
+  def anim_marquee_loop(self) -> None:
+    length = self.pixels.n
+    if length < 2:
+      raise ValueError('not enough pixels')
+    rnge = range(length)
+    buf = tuple(self.pixels)
+    self.anim = BufsAnimation(
+      self.pixels,
+      bufs=(
+        tuple(buf[n + p - length] for n in rnge)
+        for p in utils.repeat(rnge)),
+      interval=self.speeds[self.speed],
+      steps=0x10)
+    self.anim.start()
 
 class BufStore:
 
-  actions = 'restore', 'save', 'clear'
+  actions: ClassVar[Collection[str]] = 'restore', 'save', 'clear'
+  fallback_color: ClassVar[ColorType] = defaults.initial_color
 
   subdir: str = 'buffers'
-  fallback_color: ColorType = 0xffffff
 
   def __init__(self, pixels: NeoPixel, sd: SdReader, size: int) -> None:
     self.pixels = pixels
     self.sd = sd
     self.size = size
-    self._range = range(self.size)
+    self.range = range(self.size)
 
   def deinit(self) -> None:
     pass
@@ -257,7 +298,7 @@ class BufStore:
     return True
 
   def save(self, index: int) -> bool:
-    if index not in self._range:
+    if index not in self.range:
       raise IndexError
     if not self.sd.mkdirp(self.subdir):
       return False
@@ -273,7 +314,7 @@ class BufStore:
     return True
 
   def clear(self, index: int) -> bool:
-    if index not in self._range:
+    if index not in self.range:
       raise IndexError
     if not self.sd.checkmount():
       return False
@@ -286,7 +327,7 @@ class BufStore:
     return True
 
   def has(self, index: int) -> bool:
-    if index not in self._range:
+    if index not in self.range:
       return False
     if self.sd.checkmount():
       try:
@@ -320,11 +361,13 @@ class BufStore:
         f.seek(0)
 
   def file(self, index: int) -> str:
-    if index not in self._range:
+    if index not in self.range:
       raise IndexError
     return f'{self.sd.path}/{self.subdir}/s{index:03}'
 
 class SdReader:
+
+  enabled: bool = True
 
   card: sdcardio.SDCard|None
   vfs: storage.VfsFat|None
@@ -333,12 +376,12 @@ class SdReader:
   def checkfile(self) -> str:
     return f'{self.path}/.mountcheck'
 
-  def __init__(self, cs: Pin, *, path: str = '/sd') -> None:
+  def __init__(self, spi: busio.SPI, cs: Pin, *, path: str = '/sd') -> None:
+    self.spi = spi
     self.cs = cs
     self.path = path
     self.card = None
     self.vfs = None
-    self.enabled = True
 
   def deinit(self) -> None:
     self.umount()
@@ -357,7 +400,7 @@ class SdReader:
       return False
     self.umount()
     try:
-      self.card = sdcardio.SDCard(board.SPI(), self.cs)
+      self.card = sdcardio.SDCard(self.spi, self.cs)
       self.vfs = storage.VfsFat(self.card)
       storage.mount(self.vfs, self.path)
       open(self.checkfile, 'w').close()
@@ -379,7 +422,7 @@ class SdReader:
 
   def mkdirp(self, path: str) -> bool:
     if not path:
-      return ValueError(path)
+      raise ValueError(path)
     if not self.checkmount():
       return False
     try:
@@ -409,21 +452,21 @@ class SdReader:
 
 class Led:
 
-  OFF = True
-  ON = False
+  OFF: ClassVar[bool] = True
+  ON: ClassVar[bool] = False
 
-  off_at: int|None
+  io: DigitalInOut
+  off_at: int|None = None
 
   def __init__(self, pin: Pin) -> None:
     self.io = DigitalInOut(pin)
     self.io.direction = Direction.OUTPUT
     self.io.value = self.OFF
-    self.off_at = None
 
-  def deinit(self):
+  def deinit(self) -> None:
     self.io.deinit()
 
-  def flash(self, duration: int = 100) -> None:
+  def flash(self, duration: int = 0x80) -> None:
     self.io.value = self.ON
     self.off_at = ticks_add(ticks_ms(), duration)
 
@@ -450,100 +493,57 @@ class ActLeds(namedtuple('LedsBase', ('act', 'err'))):
     return cls(*map(Led, pins))
 
 class Animation:
+  pixels: NeoPixel
   interval: int
-  at: int
+  at: int|None = None
+
+  def start(self) -> None:
+    self.at = ticks_ms()
 
   def ready(self) -> None:
-    return ticks_diff(ticks_ms(), self.at) >= 0
+    return self.at is not None and ticks_diff(ticks_ms(), self.at) >= 0
 
-  def run(self, pixels: NeoPixel) -> None:
+  def run(self) -> None:
+    if self.ready():
+      self.tick()
+      self.at = ticks_add(ticks_ms(), self.interval)
+
+  def tick(self) -> None:
     raise NotImplementedError
 
 class FillAnimation(Animation):
 
-  def __init__(self, it: Iterator[ColorType], interval: int, at: int|None = None) -> None:
-    self.it = it
+  def __init__(self, pixels: NeoPixel, path: Iterable[ColorType], interval: int, steps: int) -> None:
+    self.pixels = pixels
+    self.it = utils.transitions(path, steps)
     self.interval = interval
-    self.at = ticks_ms() if at is None else at
     self.current = None
 
-  def run(self, pixels: NeoPixel) -> None:
+  def tick(self) -> None:
     value = next(self.it)
     if value != self.current:
-      pixels.fill(value)
-      pixels.show()
+      self.pixels.fill(value)
+      self.pixels.show()
       self.current = value
-    self.at = ticks_add(ticks_ms(), self.interval)
 
-class BufAnimation(Animation):
+class BufsAnimation(Animation):
 
-  def __init__(self, its: Sequence[Iterator[ColorType]], interval: int, at: int|None = None) -> None:
-
-    self.its = its
+  def __init__(self, pixels: NeoPixel, bufs: Iterable[Sequence[ColorType]], interval: int, steps: int) -> None:
+    self.pixels = pixels
+    self.its = tuple(
+      utils.transitions(
+        path=(buf[p] for buf in bufs),
+        steps=steps)
+      for p in range(self.pixels.n))
+    self.bufs = bufs
     self.interval = interval
-    self.at = ticks_ms() if at is None else at
 
-  def run(self, pixels: NeoPixel) -> None:
+  def tick(self) -> None:
     change = False
     for p, it in enumerate(self.its):
       value = next(it)
-      if change or pixels[p] != value:
+      if change or self.pixels[p] != value:
         change = True
-        pixels[p] = value
+        self.pixels[p] = value
     if change:
-      pixels.show()
-    self.at = ticks_add(ticks_ms(), self.interval)
-
-class Animator:
-
-  speeds = settings.anim_speeds
-  routines = 'anim_wheel_loop', 'anim_state_loop'
-
-  pixels: NeoPixel
-  bufstore: BufStore
-  anim: Animation|None = None
-  
-  def __init__(self, pixels: NeoPixel, bufstore: BufStore) -> None:
-    self.pixels = pixels
-    self.bufstore = bufstore
-
-  def deinit(self) -> None:
-    self.clear()
-
-  def run(self):
-    if self.anim and self.anim.ready():
-      try:
-        self.anim.run(self.pixels)
-      except StopIteration:
-        self.clear()
-
-  def clear(self) -> None:
-    self.anim = None
-
-  def anim_wheel_loop(self, speed: int) -> None:
-    it=utils.transitions(
-        path=(0xff0000, 0xff00, 0xff),
-        steps=0x100 * (speed + 1),
-        loop=True)
-    self.anim = FillAnimation(it, self.speeds[speed])
-
-  def anim_state_loop(self, speed: int) -> None:
-    bufs = map(self.bufstore.read, range(self.bufstore.size))
-    bufs = filter(None, bufs)
-    bufs = tuple(map(tuple, bufs))
-    if len(bufs) < 2:
-      raise ValueError('not enough buffers')
-    its = tuple(
-      utils.transitions(
-        tuple(values[p] for values in bufs),
-        steps=0x100 * (speed + 1),
-        loop=True)
-      for p in range(self.pixels.n))
-    self.anim = BufAnimation(its, self.speeds[speed])
-
-__all__ = tuple(cls.__name__ for cls in (
-  Commander,
-  BufStore,
-  SdReader,
-  ActLeds,
-  Animator))
+      self.pixels.show()

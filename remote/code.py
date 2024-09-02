@@ -44,12 +44,12 @@ keytypes = {
   'run': 'meta',
 }
 run_presets = (
-  ('func_draw', None),
-  ('anim_wheel_loop', 2),
-  ('anim_wheel_loop', 0),
-  ('anim_state_loop', 2),
-  ('anim_state_loop', 1),
-  ('anim_state_loop', 0),
+  ('anim_wheel_loop', 'run', None),
+  ('anim_buffer_loop', 'run', None),
+  ('anim_marquee_loop', 'run', None),
+  ('speed', 'clear', None),
+  ('speed', 'minus', 1),
+  ('speed', 'plus', 1),
 )
 fnums: dict[str, int] = {}
 control: dict[str, bool] = {}
@@ -167,9 +167,11 @@ def loop() -> None:
 def get_meta_command(verb: str, label: str) -> tuple[str, str, int|None]:
   fnum = fnums[label]
   if verb == 'run':
-    what, quantity = run_presets[fnum]
-  elif ('state', verb) in CODES:
-    what = 'state'
+    what, verb, quantity = run_presets[fnum]
+  elif ('buffer', verb) in CODES:
+    if verb == 'restore' and meta['save']:
+      verb == 'clear'
+    what = 'buffer'
     quantity = fnum
   else:
     raise ValueError(verb)
