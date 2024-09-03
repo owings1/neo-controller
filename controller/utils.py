@@ -47,7 +47,7 @@ def resolve_index_change(verb: str, quantity: int|None, current: int|None, lengt
       value = max(0, min(value, length - 1))
   return value
 
-def as_tuple(value: ColorType) -> tuple[int, int, int]:
+def as_tuple(value: ColorType) -> ColorTuple:
   if isinstance(value, tuple):
     return value
   r = value >> 16
@@ -109,19 +109,13 @@ def transition(a: ColorType, b: ColorType, steps: int) -> Iterator[ColorTuple]:
     raise ValueError(steps)
   a = as_tuple(a)
   b = as_tuple(b)
-  for step in range(steps):
-    yield transition_step(step, a, b, steps)
-  # diffs = tuple(b - a for (a, b) in zip(a, b))
-  # incs = tuple(diff / steps for diff in diffs)
-  # yield a
-  # for step in range(1, steps - 1):
-  #   yield tuple(map(round, (a + inc * step for (a, inc) in zip(a, incs))))
-  # yield b
+  its = tuple(graduate(x, y, steps) for (x, y) in zip(a, b))
+  for _ in range(steps):
+    yield tuple(map(next, its))
 
-def transition_step(step: int, a: ColorTuple, b: ColorTuple, steps: int) -> ColorTuple:
-  return tuple(transition_increment(step, a, b, steps) for (a, b) in zip(a, b))
-
-def transition_increment(step: int, x: int, y: int, steps: int) -> int:
-  if step >= steps - 1:
-    return y
-  return round(x + ((y - x) / steps) * step)
+def graduate(start: int, stop: int, steps: int) -> Iterator[int]:
+  diff = stop - start
+  yield start
+  for step in range(1, steps - 1):
+    yield round(start + step * (diff / steps))
+  yield stop

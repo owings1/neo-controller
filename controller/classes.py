@@ -227,7 +227,7 @@ class Animator:
   def anim_wheel_loop(self) -> None:
     self.anim = FillAnimation(
       self.pixels,
-      path=utils.repeat((0xff0000, 0xff00, 0xff)),
+      path=(0xff0000, 0xff00, 0xff),
       interval=self.speeds[self.speed],
       steps=0x100)
     self.anim.start()
@@ -239,7 +239,7 @@ class Animator:
       raise ValueError('not enough buffers')
     self.anim = BufsAnimation(
       self.pixels,
-      bufs=utils.repeat(bufs),
+      bufs=bufs,
       interval=self.speeds[self.speed],
       steps=0x100)
     self.anim.start()
@@ -248,13 +248,8 @@ class Animator:
     length = self.pixels.n
     if length < 2:
       raise ValueError('not enough pixels')
-    rnge = range(length)
-    buf = tuple(self.pixels)
-    self.anim = BufsAnimation(
+    self.anim = MarqueeAnimation(
       self.pixels,
-      bufs=(
-        tuple(buf[n + p - length] for n in rnge)
-        for p in utils.repeat(rnge)),
       interval=self.speeds[self.speed],
       steps=0x10)
     self.anim.start()
@@ -515,8 +510,8 @@ class FillAnimation(Animation):
 
   def __init__(self, pixels: NeoPixel, path: Iterable[ColorType], interval: int, steps: int) -> None:
     self.pixels = pixels
-    self.it = utils.transitions(path, steps)
     self.interval = interval
+    self.it = utils.transitions(utils.repeat(path), steps)
     self.current = None
 
   def tick(self) -> None:
@@ -528,15 +523,14 @@ class FillAnimation(Animation):
 
 class BufsAnimation(Animation):
 
-  def __init__(self, pixels: NeoPixel, bufs: Iterable[Sequence[ColorType]], interval: int, steps: int) -> None:
+  def __init__(self, pixels: NeoPixel, bufs: Sequence[Sequence[ColorType]], interval: int, steps: int) -> None:
     self.pixels = pixels
+    self.interval = interval
     self.its = tuple(
       utils.transitions(
-        path=(buf[p] for buf in bufs),
+        path=(buf[p] for buf in utils.repeat(bufs)),
         steps=steps)
       for p in range(self.pixels.n))
-    self.bufs = bufs
-    self.interval = interval
 
   def tick(self) -> None:
     change = False
@@ -547,3 +541,17 @@ class BufsAnimation(Animation):
         self.pixels[p] = value
     if change:
       self.pixels.show()
+
+class MarqueeAnimation(BufsAnimation):
+
+  def __init__(self, pixels: NeoPixel, interval: int, steps: int) -> None:
+    self.pixels = pixels
+    self.interval = interval
+    buf = tuple(self.pixels)
+    L = len(buf)
+    paths = tuple(
+      (buf[utils.absindex(i, L)] for i in utils.repeat(r))
+      for r in (range(n, L + n) for n in range(L)))
+    self.its = tuple(
+      utils.transitions(path, steps)
+      for path in paths)
