@@ -16,11 +16,7 @@ except ImportError:
 else:
   import defaults as settings
 
-def absindex(i: int, length: int) -> int:
-  try:
-    return i - (length * (i // length))
-  except ZeroDivisionError:
-    raise IndexError
+from common import absindex
 
 def resolve_index_change(verb: str, quantity: int|None, current: int|None, length: int, loop: bool) -> int|None:
   if verb == 'clear' or quantity is None:

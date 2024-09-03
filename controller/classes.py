@@ -11,13 +11,13 @@ import sdcardio
 import storage
 import utils
 from adafruit_ticks import ticks_add, ticks_diff, ticks_ms
-from digitalio import DigitalInOut, Direction
 from microcontroller import Pin
 from neopixel import NeoPixel
 from rainbowio import colorwheel
 from utils import ColorType
 
 import terms
+from common import Led, Command
 
 try:
   from typing import ClassVar, Collection, Iterable, Iterator, Self, Sequence
@@ -29,6 +29,7 @@ __all__ = (
 'Animator',
 'BufStore',
 'Changer',
+'Command',
 'Commander',
 'SdReader')
 
@@ -66,13 +67,13 @@ class Commander:
     self.lastid = cmdid
     return cmdstr or None
 
-  def parse(self, cmdstr: str) -> tuple[str, str, int|None]:
+  def parse(self, cmdstr: str) -> Command:
     what, verb = terms.ACTIONS[cmdstr[0]]
     if len(cmdstr) == 1:
       quantity = None
     else:
       quantity = int(cmdstr[1:])
-    return what, verb, quantity
+    return Command(what, verb, quantity)
 
 class Changer:
 
@@ -214,6 +215,8 @@ class Animator:
         self.clear()
 
   def speed_change(self, verb: str, quantity: int|None) -> None:
+    if quantity is not None:
+      quantity *= -1
     self.speed = utils.resolve_index_change(
       verb,
       quantity,
@@ -251,7 +254,7 @@ class Animator:
     self.anim = MarqueeAnimation(
       self.pixels,
       interval=self.speeds[self.speed],
-      steps=0x10)
+      steps=0x20)
     self.anim.start()
 
 class BufStore:
@@ -444,32 +447,6 @@ class SdReader:
       traceback.print_exception(err)
       return False
     return True
-
-class Led:
-
-  OFF: ClassVar[bool] = True
-  ON: ClassVar[bool] = False
-
-  io: DigitalInOut
-  off_at: int|None = None
-
-  def __init__(self, pin: Pin) -> None:
-    self.io = DigitalInOut(pin)
-    self.io.direction = Direction.OUTPUT
-    self.io.value = self.OFF
-
-  def deinit(self) -> None:
-    self.io.deinit()
-
-  def flash(self, duration: int = 0x80) -> None:
-    self.io.value = self.ON
-    self.off_at = ticks_add(ticks_ms(), duration)
-
-  def run(self) -> None:
-    if self.off_at is not None and self.io.value is self.ON:
-      if ticks_diff(ticks_ms(), self.off_at) >= 0:
-        self.io.value = self.OFF
-        self.off_at = None
 
 class ActLeds(namedtuple('LedsBase', ('act', 'err'))):
   act: Led

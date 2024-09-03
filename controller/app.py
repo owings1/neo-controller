@@ -104,16 +104,17 @@ class App:
     try:
       cmd = self.commander.parse(cmdstr)
       print(f'{cmd=}')
-      self.do(*cmd)
+      self.do(cmd)
     except Exception as err:
       traceback.print_exception(err)
       self.leds.err.flash()
   
-  def do(self, what: str, verb: str, quantity: int|None) -> None:
+  def do(self, cmd: Command) -> None:
+    what, verb, quantity = cmd
     action = (what, verb)
     if action not in terms.CODES:
       raise ValueError(action)
-    if what not in ('brightness', 'speed'):
+    if what not in ('brightness', 'speed', 'func_noop'):
       self.animator.clear()
     if what in self.changer.whats:
       getattr(self.changer, what)(verb, quantity)
