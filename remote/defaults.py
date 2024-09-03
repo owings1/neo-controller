@@ -18,6 +18,9 @@ layout = (
   'run',
 )
 
+# Whether the pixels are upside down
+reverse_pixel_dir = False
+
 # Serial Configuration
 
 baudrate = 115200

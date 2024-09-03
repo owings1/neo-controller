@@ -169,7 +169,10 @@ def get_meta_command(verb: str, label: str) -> Command:
   return Command(what, verb, quantity)
 
 def get_change_command(verb: str, what: str) -> Command:
-  return Command(what, verb, None if verb == 'clear' else 1)
+  quantity = None if verb == 'clear' else 1
+  if quantity and settings.reverse_pixel_dir:
+    quantity = -quantity
+  return Command(what, verb, quantity)
 
 def do_select_color(verb: str) -> None:
   actled.flash()

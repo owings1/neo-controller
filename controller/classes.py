@@ -62,7 +62,6 @@ class Commander:
     cmdid = cmdstr[0]
     if cmdid == self.lastid:
       return
-    print(f'{cmdid=}')
     cmdstr = cmdstr[1:]
     self.lastid = cmdid
     return cmdstr or None
@@ -236,21 +235,14 @@ class Animator:
     self.anim.start()
 
   def anim_buffers_loop(self) -> None:
-    bufs = map(self.bufstore.read, self.bufstore.range)
-    bufs = tuple(map(tuple, filter(None, bufs)))
-    if len(bufs) < 2:
-      raise ValueError('not enough buffers')
-    self.anim = BufsAnimation(
+    self.anim = BufstoreAnimation(
       self.pixels,
-      bufs=bufs,
+      store=self.bufstore,
       interval=self.speeds[self.speed],
       steps=0x100)
     self.anim.start()
 
   def anim_marquee_loop(self) -> None:
-    length = self.pixels.n
-    if length < 2:
-      raise ValueError('not enough pixels')
     self.anim = MarqueeAnimation(
       self.pixels,
       interval=self.speeds[self.speed],
@@ -331,7 +323,10 @@ class BufStore:
       try:
         next(self._reader(self.file(index), 1))
       except (OSError, ValueError, StopIteration) as err:
-        traceback.print_exception(err)
+        if isinstance(err, OSError) and err.errno == 2:
+          print(f'buf {index} not found')
+        else:
+          traceback.print_exception(err)
       else:
         return True
     return False
@@ -498,28 +493,37 @@ class FillAnimation(Animation):
       self.pixels.show()
       self.current = value
 
-class BufsAnimation(Animation):
+class BufstoreAnimation(Animation):
 
-  def __init__(self, pixels: NeoPixel, bufs: Sequence[Sequence[ColorType]], interval: int, steps: int) -> None:
+  def __init__(self, pixels: NeoPixel, store: BufStore, interval: int, steps: int) -> None:
     self.pixels = pixels
     self.interval = interval
-    self.its = tuple(
-      utils.transitions(
-        path=(buf[p] for buf in utils.repeat(bufs)),
-        steps=steps)
-      for p in range(self.pixels.n))
+    self.steps = steps
+    self.it = utils.buffer_transitions(self.readrepeat(store), steps)
+
+  @classmethod
+  def readrepeat(self, store: BufStore) -> Iterator[Sequence[ColorType]]:
+    i = 0
+    while True:
+      for _ in range(store.size - 1):
+        reader = store.read(i)
+        i = utils.absindex(i + 1, store.size)
+        if reader:
+          yield tuple(reader)
+          break
+      else:
+        break
 
   def tick(self) -> None:
     change = False
-    for p, it in enumerate(self.its):
-      value = next(it)
-      if change or self.pixels[p] != value:
+    for p, value in enumerate(next(self.it)):
+      if change or self.pixels[p] != utils.as_tuple(value):
         change = True
         self.pixels[p] = value
     if change:
-      self.pixels.show()
+      self.pixels.show()   
 
-class MarqueeAnimation(BufsAnimation):
+class MarqueeAnimation(Animation):
 
   def __init__(self, pixels: NeoPixel, interval: int, steps: int) -> None:
     self.pixels = pixels
@@ -532,3 +536,13 @@ class MarqueeAnimation(BufsAnimation):
     self.its = tuple(
       utils.transitions(path, steps)
       for path in paths)
+
+  def tick(self) -> None:
+    change = False
+    for p, it in enumerate(self.its):
+      value = next(it)
+      if change or self.pixels[p] != utils.as_tuple(value):
+        change = True
+        self.pixels[p] = value
+    if change:
+      self.pixels.show()

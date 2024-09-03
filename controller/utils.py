@@ -89,10 +89,31 @@ def repeat(seq: Sequence[T]) -> Iterator[T]:
   while True:
     yield from seq
 
+def buffer_transitions(bufs: Iterable[Sequence[ColorType]], steps: int) -> Iterator[Sequence[ColorTuple]]:
+  it = iter(bufs)
+  try:
+    b1 = next(it)
+    b2 = next(it)
+  except StopIteration:
+    return
+  P = range(len(b1))
+  S = range(steps)
+  while True:
+    its = tuple(transition(b1[p], b2[p], steps) for p in P)
+    for _ in S:
+      yield tuple(map(next, its))
+    try:
+      b1, b2 = b2, next(it)
+    except StopIteration:
+      break
+
 def transitions(path: Iterable[ColorType], steps: int) -> Iterator[ColorTuple]:
   it = iter(path)
-  a = next(it)
-  b = next(it)
+  try:
+    a = next(it)
+    b = next(it)
+  except StopIteration:
+    return
   while True:
     yield from transition(a, b, steps)
     try:
