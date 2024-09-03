@@ -239,7 +239,7 @@ class Animator:
       self.pixels,
       store=self.bufstore,
       interval=self.speeds[self.speed],
-      steps=0x100)
+      steps=0x50)
     self.anim.start()
 
   def anim_marquee_loop(self) -> None:

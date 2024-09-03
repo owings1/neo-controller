@@ -90,36 +90,16 @@ def repeat(seq: Sequence[T]) -> Iterator[T]:
     yield from seq
 
 def buffer_transitions(bufs: Iterable[Sequence[ColorType]], steps: int) -> Iterator[Sequence[ColorTuple]]:
-  it = iter(bufs)
-  try:
-    b1 = next(it)
-    b2 = next(it)
-  except StopIteration:
-    return
-  P = range(len(b1))
-  S = range(steps)
-  while True:
-    its = tuple(transition(b1[p], b2[p], steps) for p in P)
-    for _ in S:
+  for b1, b2 in pairwise(bufs):
+    its = tuple(
+      transition(b1[p], b2[p], steps)
+      for p in range(len(b1)))
+    for _ in range(steps):
       yield tuple(map(next, its))
-    try:
-      b1, b2 = b2, next(it)
-    except StopIteration:
-      break
 
 def transitions(path: Iterable[ColorType], steps: int) -> Iterator[ColorTuple]:
-  it = iter(path)
-  try:
-    a = next(it)
-    b = next(it)
-  except StopIteration:
-    return
-  while True:
+  for a, b in pairwise(path):
     yield from transition(a, b, steps)
-    try:
-      a, b = b, next(it)
-    except StopIteration:
-      break
 
 def transition(a: ColorType, b: ColorType, steps: int) -> Iterator[ColorTuple]:
   if steps < 1:
@@ -136,3 +116,14 @@ def graduate(start: int, stop: int, steps: int) -> Iterator[int]:
   for step in range(1, steps - 1):
     yield round(start + step * (diff / steps))
   yield stop
+
+def pairwise(it: Iterable[T]) -> Iterator[tuple[T, T]]:
+  it = iter(it)
+  try:
+    a = next(it)
+    while True:
+      b = next(it)
+      yield a, b
+      a = b
+  except StopIteration:
+    pass
