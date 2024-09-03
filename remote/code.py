@@ -1,36 +1,24 @@
 from __future__ import annotations
 
-try:
-  from typing import TYPE_CHECKING, Any, Iterator
-except ImportError:
-  TYPE_CHECKING = False
-  pass
-
-if TYPE_CHECKING:
-  import defaults
-  import defaults as settings
-else:
-  import defaults
-  import settings
-  settings.__dict__.update(
-    (name, getattr(settings, name, getattr(defaults, name)))
-    for name in defaults.__dict__)
-
 import board
 import busio
 import keypad
-from adafruit_ticks import ticks_add, ticks_diff, ticks_ms
-from digitalio import DigitalInOut, Direction
-from microcontroller import Pin
+import utils
+from digitalio import DigitalInOut
+from utils import Command, Repeater, settings
 
+from common import Led
 from terms import *
 
-OFF, ON = OFFON = True, False
+try:
+  from typing import Any, Iterator
+except ImportError:
+  pass
 
 idgen: Iterator[str]|None = None
 serial: busio.UART|None = None
-actled: DigitalInOut|None = None
-ctlled: DigitalInOut|None = None
+actled: Led|None = None
+ctlled: Led|None = None
 keys: keypad.Keys|None = None
 keytypes = {
   'clear': 'change',
@@ -45,7 +33,7 @@ keytypes = {
 }
 run_presets = (
   ('anim_wheel_loop', 'run', None),
-  ('anim_buffer_loop', 'run', None),
+  ('anim_buffers_loop', 'run', None),
   ('anim_marquee_loop', 'run', None),
   ('speed', 'clear', None),
   ('speed', 'minus', 1),
@@ -58,6 +46,7 @@ selected: dict[str, Any] = {}
 offat: dict[DigitalInOut, int] = {}
 repeat: dict[str, Any] = {}
 colors = ('brightness', 'red', 'green', 'blue', 'white')
+repeater: Repeater|None = None
 
 def main() -> None:
   try:
@@ -68,7 +57,7 @@ def main() -> None:
     deinit()
 
 def init() -> None:
-  global actled, ctlled, idgen, keys, serial
+  global actled, ctlled, idgen, keys, repeater, serial
   serial = busio.UART(board.TX, None, baudrate=settings.baudrate)
   fnum = 0
   for label in settings.layout:
@@ -83,11 +72,12 @@ def init() -> None:
     tuple(getattr(board, pin) for pin in settings.button_pins),
     value_when_pressed=False,
     pull=True)
-  actled = init_led(board.LED_GREEN)
-  ctlled = init_led(board.LED_BLUE)
+  actled = Led(board.LED_GREEN)
+  ctlled = Led(board.LED_BLUE)
+  repeater = Repeater(send_command)
   selected['color'] = 0
-  idgen = cmdid_gen()
-  send_command('func_noop', 'run', None)
+  idgen = utils.cmdid_gen()
+  send_command(Command('func_noop', 'run', None))
 
 def deinit() -> None:
   if serial:
@@ -98,42 +88,48 @@ def deinit() -> None:
     actled.deinit()
   if ctlled:
     ctlled.deinit()
+  if repeater:
+    repeater.deinit()
   offat.clear()
   control.clear()
   meta.clear()
   fnums.clear()
   selected.clear()
-  repeat.clear()
 
 def loop() -> None:
   event = keys.events.get()
   if not event:
-    flash_check()
-    repeat_check()
+    actled.run()
+    ctlled.run()
+    repeater.run()
     return
-  print(f'{event=}')
-  repeat.clear()
+  repeater.clear()
+  handle(event)
+
+def handle(event: keypad.Event) -> None:
   label = settings.layout[event.key_number]
   keytype = keytypes[label]
   if not label or not keytype:
     return
-  print(f'{keytype=} {label=}')
 
   if keytype == 'meta':
     meta[label] = event.pressed
-    ctlled.value = OFFON[any(meta.values()) or any(control.values())]
+    ctlled.set(any(meta.values()) or any(control.values()))
     print(meta)
     return
 
   if event.pressed:
     for verb in meta:
       if meta[verb]:
-        send_command(*get_meta_command(verb, label))
+        cmd = get_meta_command(verb, label)
+        if cmd.what == 'speed' and cmd.verb != 'clear':
+          repeater.schedule(cmd)
+        send_command(cmd)
         return
 
   if keytype == 'control':
     control[label] = event.pressed
-    ctlled.value = OFFON[any(control.values())]
+    ctlled.set(any(control.values()))
     print(control)
     return
 
@@ -156,15 +152,10 @@ def loop() -> None:
     return
 
   cmd = get_change_command(verb, what)
-  repeat.update(
-    at=ticks_add(ticks_ms(), settings.repeat_threshold),
-    func=send_command,
-    args=cmd,
-    interval=settings.repeat_interval)
+  repeater.schedule(cmd)
+  send_command(cmd)
 
-  send_command(*cmd)
-
-def get_meta_command(verb: str, label: str) -> tuple[str, str, int|None]:
+def get_meta_command(verb: str, label: str) -> Command:
   fnum = fnums[label]
   if verb == 'run':
     what, verb, quantity = run_presets[fnum]
@@ -175,14 +166,13 @@ def get_meta_command(verb: str, label: str) -> tuple[str, str, int|None]:
     quantity = fnum
   else:
     raise ValueError(verb)
-  return what, verb, quantity
+  return Command(what, verb, quantity)
 
-def get_change_command(verb: str, what: str) -> tuple[str, str, int|None]:
-  quantity = None if verb == 'clear' else 1
-  return what, verb, quantity
+def get_change_command(verb: str, what: str) -> Command:
+  return Command(what, verb, None if verb == 'clear' else 1)
 
 def do_select_color(verb: str) -> None:
-  flash(actled)
+  actled.flash()
   if verb == 'clear':
     value = 0
   else:
@@ -191,58 +181,18 @@ def do_select_color(verb: str) -> None:
       value -= 1
     else:
       value += 1
-    value = absindex(value, len(colors))
+    value = utils.absindex(value, len(colors))
   selected['color'] = value
 
-def send_command(what: str, verb: str, quantity: int|None) -> None:
-  flash(actled)
-  cmdstr = CODES[what, verb]
-  if quantity is not None:
-    cmdstr += str(quantity)
+def send_command(cmd: Command) -> None:
+  actled.flash()
+  cmdstr = CODES[cmd.what, cmd.verb]
+  if cmd.quantity is not None:
+    cmdstr += str(cmd.quantity)
   cmd = f'{next(idgen)}{cmdstr}\n'.encode()
   print(f'{cmdstr=} {cmd=}')
   for _ in range(-1, settings.command_repetition):
     serial.write(cmd)
-
-def init_led(pin: Pin) -> DigitalInOut:
-  led = DigitalInOut(pin)
-  led.direction = Direction.OUTPUT
-  led.value = OFF
-  return led
-
-def flash(io: DigitalInOut, ms: int = 100) -> None:
-  io.value = ON
-  offat[io] = ticks_add(ticks_ms(), ms)
-
-def flash_check() -> None:
-  rem: set|None = None
-  for io in offat:
-    if io.value is ON and ticks_diff(ticks_ms(), offat[io]) >= 0:
-      io.value = OFF
-      rem = rem or set()
-      rem.add(io)
-  if rem:
-    for io in rem:
-      del(offat[io])
-
-def repeat_check() -> None:
-  if repeat and ticks_diff(ticks_ms(), repeat['at']) >= 0:
-    repeat['at'] = ticks_add(repeat['at'], repeat['interval'])
-    repeat['func'](*repeat['args'])
-
-def cmdid_gen():
-  ranges = tuple(
-    range(ord(x), ord(y) + 1)
-    for x, y in ('09', 'az', 'AZ'))
-  while True:
-    for r in ranges:
-      yield from map(chr, r)
-
-def absindex(i: int, length: int) -> int:
-  try:
-    return i - (length * (i // length))
-  except ZeroDivisionError:
-    raise IndexError
 
 if __name__ == '__main__':
   main()
