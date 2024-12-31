@@ -160,8 +160,9 @@ def get_meta_command(verb: str, label: str) -> Command:
   if verb == 'run':
     what, verb, quantity = run_presets[fnum]
   elif ('buffer', verb) in CODES:
-    if verb == 'restore' and meta['save']:
-      verb == 'clear'
+    if meta['restore'] and meta['save']:
+      verb = 'clear'
+    print(f'{verb=} {meta=}')
     what = 'buffer'
     quantity = fnum
   else:
@@ -189,11 +190,11 @@ def do_select_color(verb: str) -> None:
 
 def send_command(cmd: Command) -> None:
   actled.flash()
+  print(f'{cmd=}')
   cmdstr = CODES[cmd.what, cmd.verb]
   if cmd.quantity is not None:
     cmdstr += str(cmd.quantity)
   cmd = f'{next(idgen)}{cmdstr}\n'.encode()
-  print(f'{cmdstr=} {cmd=}')
   for _ in range(-1, settings.command_repetition):
     serial.write(cmd)
 
