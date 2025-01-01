@@ -25,7 +25,7 @@ reverse_pixel_dir = False
 
 baudrate = 115200
 serial_timeout = 0.1
-command_repetition = 0
+command_redundancy = 0
 
 # Circuit Configuration
 

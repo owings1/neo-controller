@@ -1,21 +1,12 @@
 from __future__ import annotations
 
-try:
-  from typing import Callable, Iterator
-except ImportError:
-  import defaults as _defaults
-  import settings
-  settings.__dict__.update(
-    (name, getattr(settings, name, getattr(_defaults, name)))
-    for name in _defaults.__dict__)
-  del(_defaults)
-else:
-  import defaults as settings
-
+import defaults
+import settings
 from common import absindex as absindex
-from common import Command
+from common import Command, init_settings
 from adafruit_ticks import ticks_add, ticks_diff, ticks_ms
 
+settings = init_settings(defaults, settings)
 
 class Repeater:
 
@@ -56,3 +47,9 @@ def cmdid_gen() -> Iterator[str]:
   while True:
     for r in ranges:
       yield from map(chr, r)
+
+# IDE Environment
+try:
+  from typing import Callable, Iterator
+except ImportError:
+  pass

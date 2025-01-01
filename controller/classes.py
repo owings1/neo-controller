@@ -6,7 +6,6 @@ import traceback
 from collections import namedtuple
 
 import busio
-import defaults
 import sdcardio
 import storage
 import utils
@@ -14,7 +13,7 @@ from adafruit_ticks import ticks_add, ticks_diff, ticks_ms
 from microcontroller import Pin
 from neopixel import NeoPixel
 from rainbowio import colorwheel
-from utils import ColorType
+from utils import ColorType, settings
 
 import terms
 from common import Led, Command
@@ -84,9 +83,6 @@ class Changer:
     'green',
     'blue',
     'white')
-  brightness_scale: ClassVar[int] = defaults.brightness_scale
-  initial_brightness: ClassVar[int] = defaults.initial_brightness
-  initial_color: ClassVar[ColorType] = defaults.initial_color
 
   pixels: NeoPixel
   selected: dict[str, int|None]
@@ -120,14 +116,14 @@ class Changer:
 
   def brightness(self, verb: str, quantity: int|None) -> None:
     if verb == 'clear':
-      value = self.initial_brightness
+      value = settings.initial_brightness
     elif verb == 'set':
       value = quantity
     elif verb == 'minus':
-      value = math.ceil(self.pixels.brightness * self.brightness_scale) - quantity
+      value = math.ceil(self.pixels.brightness * settings.brightness_scale) - quantity
     else:
-      value = int(self.pixels.brightness * self.brightness_scale) + quantity
-    value = max(0, min(self.brightness_scale, value)) / self.brightness_scale
+      value = int(self.pixels.brightness * settings.brightness_scale) + quantity
+    value = max(0, min(settings.brightness_scale, value)) / settings.brightness_scale
     change = value != self.pixels.brightness
     print(f'brightness={self.pixels.brightness} {change=}')
     if change:
@@ -140,7 +136,7 @@ class Changer:
         if verb == 'minus':
           quantity *= -1
       change = False
-      initial = utils.as_tuple(self.initial_color)
+      initial = utils.as_tuple(settings.initial_color)
       for p in self.prange():
         values = list(self.pixels[p])
         pchange = False
@@ -177,7 +173,6 @@ class Changer:
 
 class Animator:
 
-  speeds: ClassVar[Sequence[int]] = defaults.speeds
   routines: ClassVar[Sequence[str]] = (
     'anim_wheel_loop',
     'anim_buffers_loop',
@@ -191,7 +186,7 @@ class Animator:
   def __init__(self, pixels: NeoPixel, bufstore: BufStore) -> None:
     self.pixels = pixels
     self.bufstore = bufstore
-    self.speed = len(self.speeds) // 2
+    self.speed = len(settings.speeds) // 2
 
   @property
   def speed(self) -> int:
@@ -199,9 +194,9 @@ class Animator:
 
   @speed.setter
   def speed(self, value: int) -> None:
-    self._speed = max(0, min(value, len(self.speeds) - 1))
+    self._speed = max(0, min(value, len(settings.speeds) - 1))
     if self.anim:
-      self.anim.interval = self.speeds[self._speed]
+      self.anim.interval = settings.speeds[self._speed]
 
   def deinit(self) -> None:
     self.clear()
@@ -214,13 +209,15 @@ class Animator:
         self.clear()
 
   def speed_change(self, verb: str, quantity: int|None) -> None:
-    if quantity is not None:
-      quantity *= -1
+    if quantity is None:
+      self.speed = len(settings.speeds) // 2
+      return
+    quantity *= -1
     self.speed = utils.resolve_index_change(
       verb,
       quantity,
       self.speed,
-      len(self.speeds),
+      len(settings.speeds),
       False)
 
   def clear(self) -> None:
@@ -230,7 +227,7 @@ class Animator:
     self.anim = FillAnimation(
       self.pixels,
       path=(0xff0000, 0xff00, 0xff),
-      interval=self.speeds[self.speed],
+      interval=settings.speeds[self.speed],
       steps=0x100)
     self.anim.start()
 
@@ -238,21 +235,20 @@ class Animator:
     self.anim = BufstoreAnimation(
       self.pixels,
       store=self.bufstore,
-      interval=self.speeds[self.speed],
+      interval=settings.speeds[self.speed],
       steps=0x50)
     self.anim.start()
 
   def anim_marquee_loop(self) -> None:
     self.anim = MarqueeAnimation(
       self.pixels,
-      interval=self.speeds[self.speed],
+      interval=settings.speeds[self.speed],
       steps=0x20)
     self.anim.start()
 
 class BufStore:
 
   actions: ClassVar[Collection[str]] = 'restore', 'save', 'clear'
-  fallback_color: ClassVar[ColorType] = defaults.initial_color
 
   subdir: str = 'buffers'
 
@@ -275,7 +271,7 @@ class BufStore:
   def restore(self, index: int) -> bool:
     it = self.read(index)
     if not it:
-      self.pixels.fill(self.fallback_color)
+      self.pixels.fill(settings.initial_color)
       self.pixels.show()
       return False
     change = False
@@ -360,10 +356,8 @@ class BufStore:
 
 class SdReader:
 
-  enabled: bool = True
-
-  card: sdcardio.SDCard|None
-  vfs: storage.VfsFat|None
+  card: sdcardio.SDCard|None = None
+  vfs: storage.VfsFat|None = None
 
   @property
   def checkfile(self) -> str:
@@ -373,8 +367,6 @@ class SdReader:
     self.spi = spi
     self.cs = cs
     self.path = path
-    self.card = None
-    self.vfs = None
 
   def deinit(self) -> None:
     self.umount()
@@ -389,7 +381,7 @@ class SdReader:
     return self.remount()
 
   def remount(self) -> bool:
-    if not self.enabled:
+    if not settings.sd_enabled:
       return False
     self.umount()
     try:
@@ -479,6 +471,7 @@ class Animation:
     raise NotImplementedError
 
 class FillAnimation(Animation):
+  'Transition through single solid colors'
 
   def __init__(self, pixels: NeoPixel, path: Iterable[ColorType], interval: int, steps: int) -> None:
     self.pixels = pixels
@@ -494,6 +487,7 @@ class FillAnimation(Animation):
       self.current = value
 
 class BufstoreAnimation(Animation):
+  'Transition through buffers from a buffer store'
 
   def __init__(self, pixels: NeoPixel, store: BufStore, interval: int, steps: int) -> None:
     self.pixels = pixels
@@ -505,6 +499,7 @@ class BufstoreAnimation(Animation):
   def readrepeat(self, store: BufStore) -> Iterator[Sequence[ColorType]]:
     i = 0
     while True:
+      # Scan for next distinct readable buffer
       for _ in range(store.size - 1):
         reader = store.read(i)
         i = utils.absindex(i + 1, store.size)
@@ -524,25 +519,28 @@ class BufstoreAnimation(Animation):
       self.pixels.show()   
 
 class MarqueeAnimation(Animation):
+  'Pixel shift transition'
 
   def __init__(self, pixels: NeoPixel, interval: int, steps: int) -> None:
     self.pixels = pixels
     self.interval = interval
     buf = tuple(self.pixels)
     L = len(buf)
-    paths = tuple(
-      (buf[utils.absindex(i, L)] for i in utils.repeat(r))
-      for r in (range(n, L + n) for n in range(L)))
     self.its = tuple(
       utils.transitions(path, steps)
-      for path in paths)
+      for path in (
+        (buf[utils.absindex(i, L)] for i in utils.repeat(r))
+        for r in (range(n, L + n)
+          for n in range(L))))
+    self.it = (map(next, self.its) for _ in utils.repeat('_'))
 
-  def tick(self) -> None:
-    change = False
-    for p, it in enumerate(self.its):
-      value = next(it)
-      if change or self.pixels[p] != utils.as_tuple(value):
-        change = True
-        self.pixels[p] = value
-    if change:
-      self.pixels.show()
+  tick = BufstoreAnimation.tick
+  # def tick(self) -> None:
+  #   change = False
+  #   for p, it in enumerate(self.its):
+  #     value = next(it)
+  #     if change or self.pixels[p] != utils.as_tuple(value):
+  #       change = True
+  #       self.pixels[p] = value
+  #   if change:
+  #     self.pixels.show()

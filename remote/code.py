@@ -10,11 +10,6 @@ from utils import Command, Repeater, settings
 from common import Led
 from terms import *
 
-try:
-  from typing import Any, Iterator
-except ImportError:
-  pass
-
 idgen: Iterator[str]|None = None
 serial: busio.UART|None = None
 actled: Led|None = None
@@ -195,8 +190,14 @@ def send_command(cmd: Command) -> None:
   if cmd.quantity is not None:
     cmdstr += str(cmd.quantity)
   cmd = f'{next(idgen)}{cmdstr}\n'.encode()
-  for _ in range(-1, settings.command_repetition):
+  for _ in range(-1, settings.command_redundancy):
     serial.write(cmd)
 
 if __name__ == '__main__':
   main()
+
+# IDE Environment
+try:
+  from typing import Any, Iterator
+except ImportError:
+  pass

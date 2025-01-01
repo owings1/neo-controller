@@ -1,22 +1,10 @@
 from __future__ import annotations
 
-try:
-  from typing import Iterable, Iterator, Sequence, TypeAlias, TypeVar
-  T = TypeVar('T')
-  ColorTuple: TypeAlias = tuple[int, int, int]
-  ColorType: TypeAlias = int|ColorTuple
-except ImportError:
-  ColorType = ColorTuple = tuple
-  import defaults as _defaults
-  import settings
-  settings.__dict__.update(
-    (name, getattr(settings, name, getattr(_defaults, name)))
-    for name in _defaults.__dict__)
-  del(_defaults)
-else:
-  import defaults as settings
+import defaults
+import settings
+from common import absindex, init_settings
 
-from common import absindex
+settings = init_settings(defaults, settings)
 
 def resolve_index_change(verb: str, quantity: int|None, current: int|None, length: int, loop: bool) -> int|None:
   if verb == 'clear' or quantity is None:
@@ -127,3 +115,13 @@ def pairwise(it: Iterable[T]) -> Iterator[tuple[T, T]]:
       a = b
   except StopIteration:
     pass
+
+# IDE Environment
+try:
+  from typing import Iterable, Iterator, Sequence, TypeAlias, TypeVar
+  T = TypeVar('T')
+  ColorTuple: TypeAlias = tuple[int, int, int]
+  ColorType: TypeAlias = int|ColorTuple
+except ImportError:
+  ColorTuple = tuple
+  ColorType = tuple

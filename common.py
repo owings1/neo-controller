@@ -1,14 +1,10 @@
 from __future__ import annotations
 
+from collections import namedtuple
 
 from adafruit_ticks import ticks_add, ticks_diff, ticks_ms
 from digitalio import DigitalInOut, Direction
 from microcontroller import Pin
-from collections import namedtuple
-try:
-  from typing import ClassVar
-except ImportError:
-  pass
 
 class Command(namedtuple('Command', ('what', 'verb', 'quantity'))):
   what: str
@@ -55,3 +51,17 @@ def absindex(i: int, length: int) -> int:
     return i - (length * (i // length))
   except ZeroDivisionError:
     raise IndexError
+
+def init_settings(defaults: MT, settings: ModuleType) -> MT:
+  for name in defaults.__dict__:
+    if not hasattr(settings, name):
+      setattr(settings, name, getattr(defaults, name))
+  return settings
+
+# IDE Environment
+try:
+  from types import ModuleType
+  from typing import ClassVar, TypeVar
+  MT = TypeVar('MT', bound=ModuleType)
+except ImportError:
+  pass
