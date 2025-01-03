@@ -3,6 +3,7 @@
 num_pixels = 7
 pixel_order = 'BRG'
 num_presets = 6
+presets_subdir = 'buffers'
 speeds = range(2, 0x82, 2)
 
 # Default Settings

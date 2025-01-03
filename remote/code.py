@@ -43,7 +43,6 @@ class App:
   repeat: dict[str, Any]|None = None
   colors = ('brightness', 'red', 'green', 'blue', 'white')
   repeater: Repeater|None = None
-  serial: busio.UART|None = None
 
   def main(self) -> None:
     try:

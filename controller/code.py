@@ -42,8 +42,12 @@ class App:
       auto_write=False,
       pixel_order=settings.pixel_order)
     self.sd = SdReader(board.SPI(), getattr(board, settings.sd_cs_pin))
-    self.bufstore = BufStore(self.pixels, self.sd, settings.num_presets)
-    self.animator = Animator(self.pixels, self.bufstore)
+    self.bufstore = BufStore(self.pixels, self.sd, settings.presets_subdir, settings.num_presets)
+    try:
+      import custom
+    except ImportError:
+      custom = None
+    self.animator = Animator(self.pixels, self.bufstore, custom)
     self.serial = busio.UART(
       None,
       board.RX,
@@ -52,6 +56,8 @@ class App:
     self.leds = ActLeds.frompins(board.LED_GREEN, board.LED_BLUE)
     self.commander = Commander(self.serial, self.leds)
     self.changer = Changer(self.pixels)
+    self.bufstore.onreadstart = self.leds.act.on
+    self.bufstore.onreadstop = self.leds.act.off
     self.sd.remount()
     self.bufstore.restore(0)
   

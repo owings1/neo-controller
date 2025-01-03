@@ -16,10 +16,11 @@ from rainbowio import colorwheel
 from utils import ColorType, settings
 
 import terms
-from common import Led, Command
+from common import Command, Led
 
 try:
-  from typing import ClassVar, Collection, Iterable, Iterator, Self, Sequence
+  from typing import (Any, ClassVar, Collection, Iterable, Iterator, Self,
+                      Sequence)
 except ImportError:
   pass
 
@@ -181,12 +182,14 @@ class Animator:
   pixels: NeoPixel
   bufstore: BufStore
   anim: Animation|None = None
+  custom: Any = None
   _speed: int
   
-  def __init__(self, pixels: NeoPixel, bufstore: BufStore) -> None:
+  def __init__(self, pixels: NeoPixel, bufstore: BufStore, custom: Any = None) -> None:
     self.pixels = pixels
     self.bufstore = bufstore
     self.speed = len(settings.speeds) // 2
+    self.custom = custom
 
   @property
   def speed(self) -> int:
@@ -232,11 +235,18 @@ class Animator:
     self.anim.start()
 
   def anim_buffers_loop(self) -> None:
-    self.anim = BufstoreAnimation(
-      self.pixels,
-      store=self.bufstore,
-      interval=settings.speeds[self.speed],
-      steps=0x50)
+    if self.custom and (func := getattr(self.custom, 'buffers_loop', None)):
+      self.anim = BufiterAnimation(
+        self.pixels,
+        it=func(len(self.pixels)),
+        interval=settings.speeds[self.speed],
+        steps=0x50)
+    else:
+      self.anim = BufstoreAnimation(
+        self.pixels,
+        store=self.bufstore,
+        interval=settings.speeds[self.speed],
+        steps=0x50)
     self.anim.start()
 
   def anim_marquee_loop(self) -> None:
@@ -250,13 +260,14 @@ class BufStore:
 
   actions: ClassVar[Collection[str]] = 'restore', 'save', 'clear'
 
-  subdir: str = 'buffers'
-
-  def __init__(self, pixels: NeoPixel, sd: SdReader, size: int) -> None:
+  def __init__(self, pixels: NeoPixel, sd: SdReader, subdir: str, size: int) -> None:
     self.pixels = pixels
     self.sd = sd
+    self.subdir = subdir.strip('/')
     self.size = size
     self.range = range(self.size)
+    self.onreadstart = None
+    self.onreadstop = None
 
   def deinit(self) -> None:
     pass
@@ -333,21 +344,34 @@ class BufStore:
 
   def _reader(self, file: str, stop: int) -> Iterator[int]:
     i = 0
-    with open(file) as f:
-      while True:
-        line = f.readline()
-        while line:
-          line = line.strip()
-          if line:
-            yield int(line)
-            i += 1
-            if i == stop:
-              return
+    if self.onreadstart:
+      self.onreadstart()
+    try:
+      with open(file) as f:
+        while True:
           line = f.readline()
-        if i == 0:
-          # empty file
-          return
-        f.seek(0)
+          while line:
+            line = line.strip()
+            if line:
+              try:
+                value = int(line)
+              except ValueError as err:
+                traceback.print_exception(err)
+              else:
+                yield value
+                i += 1
+                if i == stop:
+                  break
+            line = f.readline()
+          if i == 0:
+            # empty file
+            break
+          if i == stop:
+            break
+          f.seek(0)
+    finally:
+      if self.onreadstop:
+        self.onreadstop()
 
   def file(self, index: int) -> str:
     if index not in self.range:
@@ -455,6 +479,7 @@ class Animation:
   pixels: NeoPixel
   interval: int
   at: int|None = None
+  it: Iterable[Sequence[ColorType]]
 
   def start(self) -> None:
     self.at = ticks_ms()
@@ -468,7 +493,13 @@ class Animation:
       self.at = ticks_add(ticks_ms(), self.interval)
 
   def tick(self) -> None:
-    raise NotImplementedError
+    change = False
+    for p, value in enumerate(next(self.it)):
+      if change or self.pixels[p] != utils.as_tuple(value):
+        change = True
+        self.pixels[p] = value
+    if change:
+      self.pixels.show()   
 
 class FillAnimation(Animation):
   'Transition through single solid colors'
@@ -476,15 +507,8 @@ class FillAnimation(Animation):
   def __init__(self, pixels: NeoPixel, path: Iterable[ColorType], interval: int, steps: int) -> None:
     self.pixels = pixels
     self.interval = interval
-    self.it = utils.transitions(utils.repeat(path), steps)
-    self.current = None
-
-  def tick(self) -> None:
-    value = next(self.it)
-    if value != self.current:
-      self.pixels.fill(value)
-      self.pixels.show()
-      self.current = value
+    r = range(len(self.pixels))
+    self.it = ((x for _ in r) for x in utils.transitions(utils.repeat(path), steps))
 
 class BufstoreAnimation(Animation):
   'Transition through buffers from a buffer store'
@@ -492,7 +516,6 @@ class BufstoreAnimation(Animation):
   def __init__(self, pixels: NeoPixel, store: BufStore, interval: int, steps: int) -> None:
     self.pixels = pixels
     self.interval = interval
-    self.steps = steps
     self.it = utils.buffer_transitions(self.readrepeat(store), steps)
 
   @classmethod
@@ -508,15 +531,6 @@ class BufstoreAnimation(Animation):
           break
       else:
         break
-
-  def tick(self) -> None:
-    change = False
-    for p, value in enumerate(next(self.it)):
-      if change or self.pixels[p] != utils.as_tuple(value):
-        change = True
-        self.pixels[p] = value
-    if change:
-      self.pixels.show()   
 
 class MarqueeAnimation(Animation):
   'Pixel shift transition'
@@ -534,13 +548,10 @@ class MarqueeAnimation(Animation):
           for n in range(L))))
     self.it = (map(next, self.its) for _ in utils.repeat('_'))
 
-  tick = BufstoreAnimation.tick
-  # def tick(self) -> None:
-  #   change = False
-  #   for p, it in enumerate(self.its):
-  #     value = next(it)
-  #     if change or self.pixels[p] != utils.as_tuple(value):
-  #       change = True
-  #       self.pixels[p] = value
-  #   if change:
-  #     self.pixels.show()
+class BufiterAnimation(Animation):
+  'Custom buffer iterator'
+
+  def __init__(self, pixels: NeoPixel, it: Iterable[Sequence[ColorType]], interval: int, steps: int) -> None:
+    self.pixels = pixels
+    self.interval = interval
+    self.it = utils.buffer_transitions(it, steps)
