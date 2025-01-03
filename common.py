@@ -9,7 +9,7 @@ from microcontroller import Pin
 class Command(namedtuple('Command', ('what', 'verb', 'quantity'))):
   what: str
   verb: str
-  quantity: int|None
+  quantity: int|tuple[int, ...]|None
 
 class Led:
 

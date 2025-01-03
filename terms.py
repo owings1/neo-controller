@@ -27,9 +27,9 @@ ACTIONS = {
   'z': ('hue', 'plus'),
   'A': ('hue', 'minus'),
   'B': ('hue', 'clear'),
-  'C': ('buffer', 'save'),
-  'D': ('buffer', 'restore'),
-  'E': ('buffer', 'clear'),
+  'C': ('bufstore', 'save'),
+  'D': ('bufstore', 'restore'),
+  'E': ('bufstore', 'clear'),
   'F': ('speed', 'set'),
   'G': ('speed', 'plus'),
   'H': ('speed', 'minus'),
@@ -39,6 +39,9 @@ ACTIONS = {
   'L': ('anim_wheel_loop', 'run'),
   'M': ('anim_buffers_loop', 'run'),
   'N': ('anim_marquee_loop', 'run'),
+  'W': ('buffer', 'set'),
+  'X': ('color', 'set'),
+  'Y': ('color', 'copy'),
 }
 
 CODES = dict(map(reversed, ACTIONS.items()))

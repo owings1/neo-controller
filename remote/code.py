@@ -20,7 +20,7 @@ class App:
     'clear': 'change',
     'minus': 'change',
     'plus': 'change',
-    'color': 'control',
+    'shade': 'control',
     'pixel': 'control',
     'hue': 'control',
     'restore': 'meta',
@@ -41,7 +41,7 @@ class App:
   selected: dict[str, Any]|None = None
   offat: dict[DigitalInOut, int]|None = None
   repeat: dict[str, Any]|None = None
-  colors = ('brightness', 'red', 'green', 'blue', 'white')
+  shades = ('brightness', 'red', 'green', 'blue', 'white')
   repeater: Repeater|None = None
 
   def main(self) -> None:
@@ -79,7 +79,7 @@ class App:
     self.actled = Led(board.LED_GREEN)
     self.ctlled = Led(board.LED_BLUE)
     self.repeater = Repeater(self.send_command)
-    self.selected['color'] = 0
+    self.selected['shade'] = 0
     self.idgen = utils.cmdid_gen()
     self.send_command(Command('func_noop', 'run', None))
 
@@ -153,10 +153,10 @@ class App:
       if self.control[what]:
         break
     else:
-      what = self.colors[self.selected['color']]
+      what = self.shades[self.selected['shade']]
 
-    if what == 'color':
-      self.do_select_color(verb)
+    if what == 'shade':
+      self.do_select_shade(verb)
       print(self.selected)
       return
 
@@ -168,11 +168,11 @@ class App:
     fnum = self.fnums[label]
     if verb == 'run':
       what, verb, quantity = self.run_presets[fnum]
-    elif ('buffer', verb) in CODES:
+    elif ('bufstore', verb) in CODES:
       if self.meta['restore'] and self.meta['save']:
         verb = 'clear'
       print(f'{verb=} meta={self.meta}')
-      what = 'buffer'
+      what = 'bufstore'
       quantity = fnum
     else:
       raise ValueError(verb)
@@ -184,25 +184,28 @@ class App:
       quantity = -quantity
     return Command(what, verb, quantity)
 
-  def do_select_color(self, verb: str) -> None:
+  def do_select_shade(self, verb: str) -> None:
     self.actled.flash()
     if verb == 'clear':
       value = 0
     else:
-      value = self.selected['color']
+      value = self.selected['shade']
       if verb == 'minus':
         value -= 1
       else:
         value += 1
-      value = utils.absindex(value, len(self.colors))
-    self.selected['color'] = value
+      value = utils.absindex(value, len(self.shades))
+    self.selected['shade'] = value
 
   def send_command(self, cmd: Command) -> None:
     self.actled.flash()
     print(f'{cmd=}')
     cmdstr = CODES[cmd.what, cmd.verb]
     if cmd.quantity is not None:
-      cmdstr += str(cmd.quantity)
+      if cmd.what == 'buffer' and cmd.verb == 'set':
+        cmdstr += ','.join(map(str, cmd.quantity))
+      else:
+        cmdstr += str(cmd.quantity)
     cmd = f'{next(self.idgen)}{cmdstr}\n'.encode()
     for _ in range(-1, settings.command_redundancy):
       self.serial.write(cmd)

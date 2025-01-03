@@ -12,7 +12,7 @@ layout = (
   'plus',
   'hue',
   'pixel',
-  'color',
+  'shade',
   'restore',
   'save',
   'run',

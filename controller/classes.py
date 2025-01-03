@@ -71,12 +71,17 @@ class Commander:
     if len(cmdstr) == 1:
       quantity = None
     else:
-      quantity = int(cmdstr[1:])
+      if what == 'buffer' and verb == 'set':
+        quantity = tuple(map(int, cmdstr[1:].split(',')))
+      else:
+        quantity = int(cmdstr[1:])
     return Command(what, verb, quantity)
 
 class Changer:
 
   whats: ClassVar[Collection[str]] = (
+    'buffer',
+    'color',
     'pixel',
     'hue',
     'brightness',
@@ -95,6 +100,40 @@ class Changer:
   def deinit(self) -> None:
     for key in self.selected:
       self.selected[key] = None
+
+  def buffer(self, verb: str, buf: Sequence[ColorType]) -> None:
+    if verb != 'set':
+      raise ValueError(verb)
+    change = False
+    for p in range(self.pixels.n):
+      try:
+        value = utils.as_int(buf[p])
+      except IndexError:
+        break
+      cur = utils.as_int(self.pixels[p])
+      if cur != value:
+        self.pixels[p] = value
+        change = True
+    if change:
+      self.pixels.show()
+    print(f'buffer={buf}')
+
+  def color(self, verb: str, value: ColorType|int) -> None:
+    if verb == 'set':
+      value = min(0xffffff, max(0, utils.as_int(value)))
+    elif verb == 'copy':
+      value = utils.as_int(self.pixels[utils.absindex(value, self.pixels.n)])
+    else:
+      raise ValueError(verb)
+    change = False
+    for p in self.prange():
+      cur = utils.as_int(self.pixels[p])
+      if cur != value:
+        self.pixels[p] = value
+        change = True
+    if change:
+      self.pixels.show()
+    print(f'color={value}')
 
   def pixel(self, verb: str, quantity: int|None) -> None:
     value = utils.resolve_index_change(verb, quantity, self.selected['pixel'], self.pixels.n, True)
@@ -131,7 +170,7 @@ class Changer:
       self.pixels.brightness = value
       self.pixels.show()
 
-  def color(color: str, indexes: Collection[int]):
+  def shade(color: str, indexes: Collection[int]):
     def wrapper(self: Self, verb: str, quantity: int|None) -> None:
       if quantity is not None:
         if verb == 'minus':
@@ -160,12 +199,12 @@ class Changer:
       self.selected['hue'] = None
     return wrapper
 
-  red = color('red', (0,))
-  green = color('green', (1,))
-  blue = color('blue', (2,))
-  white = color('white', range(3))
+  red = shade('red', (0,))
+  green = shade('green', (1,))
+  blue = shade('blue', (2,))
+  white = shade('white', range(3))
 
-  del(color)
+  del(shade)
 
   def prange(self) -> Collection[int]:
     if self.selected['pixel'] is None:

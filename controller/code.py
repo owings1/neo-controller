@@ -106,7 +106,7 @@ class App:
       getattr(self.changer, what)(verb, quantity)
     elif what == 'speed':
       self.animator.speed_change(verb, quantity)
-    elif what == 'buffer':
+    elif what == 'bufstore':
       if not self.bufstore.action(verb, quantity):
         self.leds.err.flash()
       if verb == 'restore':
