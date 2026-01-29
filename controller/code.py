@@ -11,7 +11,6 @@ from utils import settings
 import terms
 
 class App:
-
   animator: Animator|None = None
   bufstore: BufStore|None = None
   changer: Changer|None = None
@@ -24,6 +23,7 @@ class App:
   def main(self) -> None:
     try:
       self.init()
+      print(f'Running loop')
       while True:
         self.loop()
     except KeyboardInterrupt:
@@ -33,12 +33,12 @@ class App:
   
   def init(self) -> None:
     self.deinit()
+    initial_brightness = settings.initial_brightness / settings.brightness_scale
+    print(f'Initializing {settings.num_pixels} pixels {initial_brightness=}')
     self.pixels = NeoPixel(
       getattr(board, settings.data_pin),
       settings.num_pixels,
-      brightness=(
-        settings.initial_brightness /
-        settings.brightness_scale),
+      brightness=initial_brightness,
       auto_write=False,
       pixel_order=settings.pixel_order)
     self.sd = SdReader(board.SPI(), getattr(board, settings.sd_cs_pin))
@@ -47,19 +47,28 @@ class App:
       import custom
     except ImportError:
       custom = None
+    else:
+      print(f'Imported custom module')
     self.animator = Animator(self.pixels, self.bufstore, custom)
-    self.serial = busio.UART(
-      None,
-      board.RX,
-      baudrate=settings.baudrate,
-      timeout=settings.serial_timeout)
     self.leds = ActLeds.frompins(board.LED_GREEN, board.LED_BLUE)
-    self.commander = Commander(self.serial, self.leds)
+    if settings.serial_enabled:
+      self.serial = busio.UART(
+        None,
+        board.RX,
+        baudrate=settings.baudrate,
+        timeout=settings.serial_timeout)
+      self.commander = Commander(self.serial, self.leds)
     self.changer = Changer(self.pixels)
     self.bufstore.onreadstart = self.leds.act.on
     self.bufstore.onreadstop = self.leds.act.off
-    self.sd.remount()
-    self.bufstore.restore(0)
+    if settings.sd_enabled:
+      print(f'Attempting to mount SD')
+      self.sd.remount()
+    print(f'Running anim_buffers_loop')
+    self.animator.speed = len(settings.speeds) - 1
+    self.animator.anim_buffers_loop()
+    # print(f'Restoring buf 0')
+    # self.bufstore.restore(0)
   
   def deinit(self) -> None:
     if self.commander:
@@ -82,7 +91,7 @@ class App:
   def loop(self) -> None:
     self.animator.run()
     self.leds.run()
-    cmdstr = self.commander.read()
+    cmdstr = self.commander and self.commander.read()
     if not cmdstr:
       return
     self.leds.act.flash()
@@ -131,5 +140,3 @@ del(App)
 
 if __name__ == '__main__':
   app.main()
-
-

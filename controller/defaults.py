@@ -14,6 +14,7 @@ initial_color = 0xffffff
 
 # Serial Configuration
 
+serial_enabled = True
 baudrate = 115200
 serial_timeout = 0.125
 

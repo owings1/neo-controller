@@ -25,16 +25,15 @@ except ImportError:
   pass
 
 __all__ = (
-'ActLeds',
-'Animator',
-'BufStore',
-'Changer',
-'Command',
-'Commander',
-'SdReader')
+  'ActLeds',
+  'Animator',
+  'BufStore',
+  'Changer',
+  'Command',
+  'Commander',
+  'SdReader')
 
 class Commander:
-
   serial: busio.UART
   leds: ActLeds
   lastid: str|None = None
@@ -78,7 +77,6 @@ class Commander:
     return Command(what, verb, quantity)
 
 class Changer:
-
   whats: ClassVar[Collection[str]] = (
     'buffer',
     'color',
@@ -89,7 +87,6 @@ class Changer:
     'green',
     'blue',
     'white')
-
   pixels: NeoPixel
   selected: dict[str, int|None]
 
@@ -212,12 +209,10 @@ class Changer:
     return (self.selected['pixel'],)
 
 class Animator:
-
   routines: ClassVar[Sequence[str]] = (
     'anim_wheel_loop',
     'anim_buffers_loop',
     'anim_marquee_loop')
-
   pixels: NeoPixel
   bufstore: BufStore
   anim: Animation|None = None
@@ -296,7 +291,6 @@ class Animator:
     self.anim.start()
 
 class BufStore:
-
   actions: ClassVar[Collection[str]] = 'restore', 'save', 'clear'
 
   def __init__(self, pixels: NeoPixel, sd: SdReader, subdir: str, size: int) -> None:
@@ -321,6 +315,7 @@ class BufStore:
   def restore(self, index: int) -> bool:
     it = self.read(index)
     if not it:
+      print(f'Did not read buf {index=} filling with {settings.initial_color}')
       self.pixels.fill(settings.initial_color)
       self.pixels.show()
       return False
@@ -418,7 +413,6 @@ class BufStore:
     return f'{self.sd.path}/{self.subdir}/s{index:03}'
 
 class SdReader:
-
   card: sdcardio.SDCard|None = None
   vfs: storage.VfsFat|None = None
 
