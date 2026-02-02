@@ -270,12 +270,14 @@ class Animator:
 
   def anim_buffers_loop(self) -> None:
     if self.custom and (func := getattr(self.custom, 'buffers_loop', None)):
+      print(f'Running custom.buffers_loop')
       self.anim = BufiterAnimation(
         self.pixels,
         it=func(len(self.pixels)),
         interval=settings.speeds[self.speed],
         steps=0x50)
     else:
+      print(f'Running bufstore animation')
       self.anim = BufstoreAnimation(
         self.pixels,
         store=self.bufstore,

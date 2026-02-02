@@ -34,7 +34,10 @@ class App:
   def init(self) -> None:
     self.deinit()
     initial_brightness = settings.initial_brightness / settings.brightness_scale
-    print(f'Initializing {settings.num_pixels} pixels {initial_brightness=}')
+    print(
+      f'Initializing {settings.num_pixels} pixels '
+      f'on data pin {settings.data_pin} '
+      f'{initial_brightness=}')
     self.pixels = NeoPixel(
       getattr(board, settings.data_pin),
       settings.num_pixels,
@@ -47,24 +50,29 @@ class App:
       import custom
     except ImportError:
       custom = None
+      print(f'No custom module')
     else:
       print(f'Imported custom module')
     self.animator = Animator(self.pixels, self.bufstore, custom)
     self.leds = ActLeds.frompins(board.LED_GREEN, board.LED_BLUE)
     if settings.serial_enabled:
+      print(f'Initializing serial')
       self.serial = busio.UART(
         None,
         board.RX,
         baudrate=settings.baudrate,
         timeout=settings.serial_timeout)
       self.commander = Commander(self.serial, self.leds)
+    else:
+      print(f'Serial disabled')
     self.changer = Changer(self.pixels)
     self.bufstore.onreadstart = self.leds.act.on
     self.bufstore.onreadstop = self.leds.act.off
     if settings.sd_enabled:
       print(f'Attempting to mount SD')
       self.sd.remount()
-    print(f'Running anim_buffers_loop')
+    else:
+      print('SD disabled')
     self.animator.speed = len(settings.speeds) - 1
     self.animator.anim_buffers_loop()
     # print(f'Restoring buf 0')
