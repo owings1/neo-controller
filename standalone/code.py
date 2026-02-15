@@ -8,7 +8,6 @@ from neopixel import NeoPixel
 from neopixel_spi import NeoPixel_SPI
 from utils import settings
 
-
 class App:
   animator: Animator|None = None
   changer: Changer|None = None
@@ -16,6 +15,9 @@ class App:
   pixels: NeoPixel|NeoPixel_SPI|None = None
   keys: keypad.Keys|None = None
   buttons: Buttons|None = None
+  rotary: Rotary|None = None
+  i2c: busio.I2C|None = None
+  rotary_mode = 0
 
   def main(self) -> None:
     try:
@@ -46,14 +48,23 @@ class App:
       brightness=initial_brightness,
       auto_write=False,
       pixel_order=settings.pixel_order)
-    self.keys = keypad.Keys(
-      tuple(getattr(board, pin) for pin in (
-        settings.b0_pin,
-        settings.b1_pin,
-        settings.b2_pin)),
-      value_when_pressed=False,
-      pull=True)
-    self.buttons = Buttons(self.keys)
+    if settings.rotary_enabled:
+      self.i2c = busio.I2C(board.SCL, board.SDA)
+      self.rotary = Rotary(
+        i2c=self.i2c,
+        int_pin=getattr(board, settings.rotary_int_pin),
+        address=settings.rotary_address,
+        reverse=settings.rotary_reverse)
+      self.rotary.handler = self.handle_rotary
+    if settings.buttons_enabled:
+      self.keys = keypad.Keys(
+        tuple(getattr(board, pin) for pin in (
+          settings.b0_pin,
+          settings.b1_pin,
+          settings.b2_pin)),
+        value_when_pressed=False,
+        pull=True)
+      self.buttons = Buttons(self.keys)
     self.animator = Animator(self.pixels)
     self.changer = Changer(self.pixels)
     self.animator.routine = settings.initial_routine
@@ -71,14 +82,22 @@ class App:
       self.buttons.deinit()
     if self.keys:
       self.keys.deinit()
-  
+    if self.rotary:
+      self.rotary.deinit()
+    if self.i2c:
+      self.i2c.deinit()
+    self.rotary_mode = 0
+
   def loop(self) -> None:
-    event = self.buttons.run()
-    if event:
-      self.handle(event)
+    if self.buttons:
+      event = self.buttons.run()
+      if event:
+        self.handle_button(event)
+    if self.rotary:
+      self.rotary.run()
     self.animator.run()
 
-  def handle(self, event: KeyEvent) -> None:
+  def handle_button(self, event: KeyEvent) -> None:
     print(f'{event=}')
     if not event.held:
       if event.key == 1 and event.type == 'short':
@@ -93,6 +112,28 @@ class App:
     elif event.held == {1}:
       if event.key == 2 and event.type == 'short':
         self.animator.routine_change('plus', 1)
+
+  def handle_rotary(self, event: str) -> None:
+    print(f'{event=}')
+    if event == 'increment':
+      if self.rotary_mode == 0:
+        self.changer.brightness('plus', 1)
+      elif self.rotary_mode == 1:
+        self.animator.speed_change('plus', 1)
+      elif self.rotary_mode == 2:
+        self.animator.routine_change('plus', 1)
+    elif event == 'decrement':
+      if self.rotary_mode == 0:
+        self.changer.brightness('minus', 1)
+      elif self.rotary_mode == 1:
+        self.animator.speed_change('minus', 1)
+      elif self.rotary_mode == 2:
+        self.animator.routine_change('minus', 1)
+    elif event == 'release':
+      if self.rotary_mode == 2:
+        self.rotary_mode = 0
+      else:
+        self.rotary_mode += 1
 
 app = App()
 

@@ -16,6 +16,13 @@ rando_fillchance = 0.2
 
 # Circuit Configuration
 data_pin = 'SPI'
+
+rotary_enabled = True
+rotary_int_pin = 'D3'
+rotary_address = 0x30
+rotary_reverse = False
+
+buttons_enabled = False
 b0_pin = 'D6'
 b1_pin = 'D5'
 b2_pin = 'D4'

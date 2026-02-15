@@ -14,7 +14,8 @@ cp -X -v \
   "$dest"
 cp -X -v -n \
   settings.py \
-  "$dest"
-cp -X -v -n \
+  i2cencoderlibv21.py \
+  "$dest" || true
+cp -X -v -n -r \
   lib/* \
-  "$dest/lib/"
+  "$dest/lib/" || true

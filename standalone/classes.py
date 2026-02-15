@@ -5,16 +5,22 @@ import random
 import time
 from collections import namedtuple
 
+import digitalio
+import i2cencoderlibv21
 import keypad
 import utils
 from adafruit_ticks import ticks_diff, ticks_ms
+from busio import I2C
+from i2cencoderlibv21 import I2CEncoderLibV21
+from microcontroller import Pin
 from utils import ColorType, settings
 
 __all__ = (
   'Animator',
   'Buttons',
   'Changer',
-  'KeyEvent')
+  'KeyEvent',
+  'Rotary')
 
 class Changer:
   pixels: NeoPixel
@@ -65,7 +71,8 @@ class Animator:
   def speed(self, value: int) -> None:
     self._speed = max(0, min(value, len(settings.speeds) - 1))
     if self.anim:
-      self.anim.interval = settings.speeds[self._speed]
+      self.anim.interval = self.interval
+    print(f'speed={self.speed} interval={self.interval}')
 
   @property
   def interval(self) -> int:
@@ -79,12 +86,12 @@ class Animator:
   def routine(self, value: str) -> None:
     if value not in self.routines:
       raise ValueError(f'routine={value}')
-    print(f'routine={value}')
     func = getattr(self, f'anim_{value}')
     self.clear()
     self.anim = func()
     self.anim.start()
     self._routine = value
+    print(f'routine={self.routine}')
 
   def deinit(self) -> None:
     self.clear()
@@ -106,7 +113,6 @@ class Animator:
         self.speed,
         len(settings.speeds),
         False)
-    print(f'speed={self.speed} interval={settings.speeds[self.speed]}')
 
   def routine_change(self, verb: str, quantity: int|None) -> None:
     if quantity is None:
@@ -114,12 +120,11 @@ class Animator:
     else:
       self.routine = self.routines[
         utils.resolve_index_change(
-          'plus',
-          1,
+          verb,
+          quantity,
           self.routines.index(self.routine),
           len(self.routines),
           True)]
-    print(f'routine={self.routine}')
 
   def clear(self) -> None:
     self.anim = None
@@ -268,6 +273,61 @@ class KeyEvent(namedtuple('KeyEventBase', ('key', 'type', 'held'))):
   key: int
   type: str
   held: set[int]
+
+class Rotary:
+  encoder: I2CEncoderLibV21
+  i2c: I2C
+  config = i2cencoderlibv21.IPUP_DISABLE
+
+  def __init__(self, i2c: I2C, int_pin: Pin, address: int, reverse: bool = False):
+    self.i2c = i2c
+    self.int = digitalio.DigitalInOut(int_pin)
+    self.int.direction = digitalio.Direction.INPUT
+    self.int.pull = digitalio.Pull.UP
+    if reverse:
+      self.config |= i2cencoderlibv21.DIRE_LEFT
+    self.encoder = I2CEncoderLibV21(self.i2c, address)
+    self.encoder.reset()
+    time.sleep(0.1)
+    self.encoder.begin(self.config)
+    self.encoder.write_counter(0)
+    self.encoder.write_max(10)
+    self.encoder.write_min(-10)
+    self.encoder.write_step_size(1)
+    self.encoder.write_antibounce_period(25)
+    self.encoder.write_double_push_period(50)
+
+    self.encoder.onIncrement = self.on_increment
+    self.encoder.onDecrement = self.on_decrement
+    self.encoder.onButtonRelease = self.on_release
+    self.encoder.onButtonPush = self.on_push
+    self.encoder.onButtonDoublePush = self.on_double_push
+    self.encoder.autoconfig_interrupt()
+
+  def on_increment(self):
+    self.handler('increment')
+
+  def on_decrement(self):
+    self.handler('decrement')
+
+  def on_release(self):
+    self.handler('release')
+
+  def on_push(self):
+    self.handler('push')
+
+  def on_double_push(self):
+    self.handler('double_push')
+
+  def run(self):
+    if not self.int.value:
+      self.encoder.update_status()
+
+  def handler(self, event: str) -> None:
+    print(f'{event=}')
+
+  def deinit(self):
+    self.int.deinit()
 
 # Typing
 try:
