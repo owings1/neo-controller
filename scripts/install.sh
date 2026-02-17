@@ -5,7 +5,7 @@ if [[ "$#" -ne 1 ]]; then
   exit 1
 fi
 dest="$(realpath "$1")"
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 cp -X -v \
   classes.py \
   code.py \

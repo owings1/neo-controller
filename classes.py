@@ -34,6 +34,10 @@ class Changer:
   def brightness(self, verb: str, quantity: int|None) -> None:
     if verb == 'clear':
       value = settings.initial_brightness
+    elif verb == 'min':
+      value = 0
+    elif verb == 'max':
+      value = settings.brightness_scale
     elif verb == 'set':
       value = quantity
     elif verb == 'minus':
@@ -42,10 +46,10 @@ class Changer:
       value = int(self.pixels.brightness * settings.brightness_scale) + quantity
     value = max(0, min(settings.brightness_scale, value)) / settings.brightness_scale
     change = value != self.pixels.brightness
-    print(f'brightness={self.pixels.brightness} {change=}')
     if change:
       self.pixels.brightness = value
       self.pixels.show()
+    print(f'brightness={self.pixels.brightness} {change=}')
 
 class Animator:
   routines: ClassVar[Sequence[str]] = (
@@ -96,15 +100,16 @@ class Animator:
   def deinit(self) -> None:
     self.clear()
 
-  def run(self):
+  def run(self) -> bool:
     if self.anim:
       try:
-        self.anim.run()
+        return self.anim.run()
       except StopIteration:
         self.clear()
+    return False
 
   def speed_change(self, verb: str, quantity: int|None) -> None:
-    if quantity is None:
+    if verb == 'clear':
       self.speed = settings.initial_speed
     else:
       self.speed = utils.resolve_index_change(
@@ -115,7 +120,7 @@ class Animator:
         False)
 
   def routine_change(self, verb: str, quantity: int|None) -> None:
-    if quantity is None:
+    if verb == 'clear':
       self.routine = settings.initial_routine
     else:
       self.routine = self.routines[
@@ -189,13 +194,15 @@ class Animation:
   def start(self) -> None:
     self.at = time.monotonic_ns()
 
-  def ready(self) -> None:
+  def ready(self) -> bool:
     return self.at is not None and time.monotonic_ns() - self.at >= 0
 
-  def run(self) -> None:
+  def run(self) -> bool:
     if self.ready():
       self.tick()
       self.at = time.monotonic_ns() + self.interval * 1000 * settings.min_micros_interval * self.interval_coeff
+      return True
+    return False
 
   def tick(self) -> None:
     change = False
@@ -223,12 +230,21 @@ class PathAnimation(Animation):
         yield gennext()
     super().__init__(pixels, interval, bufiter())
 
-class Buttons:
-  keys: keypad.Keys
-  long_duration: int = 1000
+class IdleMixin:
+  last_event_at: int = 0
 
-  def __init__(self, keys: keypad.Keys):
+  @property
+  def idle_ms(self) -> int:
+    return ticks_diff(ticks_ms(), self.last_event_at)
+
+class Buttons(IdleMixin):
+  keys: keypad.Keys
+  long_duration_ms: int = settings.buttons_long_duration_ms
+  handler: Callable[[KeyEvent], None]|None = None
+
+  def __init__(self, keys: keypad.Keys, handler: Callable[[KeyEvent], None]|None = None):
     self.keys = keys
+    self.handler = handler
     self.states = [KeyState() for _ in range(self.keys.key_count)]
 
   def run(self) -> KeyEvent|None:
@@ -247,7 +263,7 @@ class Buttons:
     duration = ticks_diff(state.released_at, state.pressed_at)
     # Clear pressed at
     state.pressed_at = None
-    presstype = 'long' if duration >= self.long_duration else 'short'
+    presstype = 'long' if duration >= self.long_duration_ms else 'short'
     held: set[int] = set()
     for i, s in enumerate(self.states):
       if i != event.key_number:
@@ -255,7 +271,11 @@ class Buttons:
           held.add(i)
         # Clear last release
         s.released_at = None
-    return KeyEvent(event.key_number, presstype, held)
+    keyevent = KeyEvent(event.key_number, presstype, held)
+    if self.handler:
+      self.handler(keyevent)
+    self.last_event_at = ticks_ms()
+    return keyevent
 
   def deinit(self) -> None:
     for state in self.states:
@@ -274,64 +294,62 @@ class KeyEvent(namedtuple('KeyEventBase', ('key', 'type', 'held'))):
   type: str
   held: set[int]
 
-class Rotary:
+class Rotary(IdleMixin):
   encoder: I2CEncoderLibV21
-  i2c: I2C
+  int: digitalio.DigitalInOut
+  handler: Callable[[str], None]|None = None
   config = i2cencoderlibv21.IPUP_DISABLE
 
-  def __init__(self, i2c: I2C, int_pin: Pin, address: int, reverse: bool = False):
-    self.i2c = i2c
+  def __init__(
+    self,
+    i2c: I2C,
+    int_pin: Pin,
+    address: int,
+    reverse: bool = False,
+    handler: Callable[[str], None]|None = None,
+  ) -> None:
+    self.encoder = I2CEncoderLibV21(i2c, address)
+    self.encoder.reset()
     self.int = digitalio.DigitalInOut(int_pin)
     self.int.direction = digitalio.Direction.INPUT
     self.int.pull = digitalio.Pull.UP
+    self.handler = handler
     if reverse:
       self.config |= i2cencoderlibv21.DIRE_LEFT
-    self.encoder = I2CEncoderLibV21(self.i2c, address)
-    self.encoder.reset()
-    time.sleep(0.1)
-    self.encoder.begin(self.config)
-    self.encoder.write_counter(0)
-    self.encoder.write_max(10)
-    self.encoder.write_min(-10)
-    self.encoder.write_step_size(1)
-    self.encoder.write_antibounce_period(25)
-    self.encoder.write_double_push_period(50)
 
-    self.encoder.onIncrement = self.on_increment
-    self.encoder.onDecrement = self.on_decrement
-    self.encoder.onButtonRelease = self.on_release
-    self.encoder.onButtonPush = self.on_push
-    self.encoder.onButtonDoublePush = self.on_double_push
+    def make_handler(event: str):
+      def handler():
+        if self.handler:
+          self.handler(event)
+        else:
+          print(f'{event=}')
+        self.last_event_at = ticks_ms()
+      return handler
+
+    self.encoder.onIncrement = make_handler('increment')
+    self.encoder.onDecrement = make_handler('decrement')
+    self.encoder.onButtonRelease = make_handler('release')
+    self.encoder.onButtonPush = make_handler('push')
+    self.encoder.onButtonDoublePush = make_handler('double_push')
+    time.sleep(0.001)
+    self.encoder.begin(self.config)
+    self.encoder.write_antibounce_period(settings.rotary_antibounce_period)
+    self.encoder.write_double_push_period(settings.rotary_double_push_period)
+
     self.encoder.autoconfig_interrupt()
 
-  def on_increment(self):
-    self.handler('increment')
-
-  def on_decrement(self):
-    self.handler('decrement')
-
-  def on_release(self):
-    self.handler('release')
-
-  def on_push(self):
-    self.handler('push')
-
-  def on_double_push(self):
-    self.handler('double_push')
-
-  def run(self):
+  def run(self) -> bool:
     if not self.int.value:
       self.encoder.update_status()
+      return True
+    return False
 
-  def handler(self, event: str) -> None:
-    print(f'{event=}')
-
-  def deinit(self):
+  def deinit(self) -> None:
     self.int.deinit()
 
 # Typing
 try:
   from neopixel import NeoPixel
-  from typing import ClassVar, Iterable, Sequence
+  from typing import Callable, ClassVar, Iterable, Sequence
 except ImportError:
   pass
