@@ -56,13 +56,21 @@ class App:
       auto_write=False,
       pixel_order=settings.pixel_order)
     if settings.rotary_enabled:
-      self.i2c = self.i2c or busio.I2C(board.SCL, board.SDA)
-      self.rotary = Rotary(
-        i2c=self.i2c,
-        int_pin=getattr(board, settings.rotary_int_pin),
-        address=settings.rotary_address,
-        reverse=settings.rotary_reverse,
-        handler=self.handle_rotary)
+      if settings.rotary_i2c:
+        self.i2c = self.i2c or busio.I2C(board.SCL, board.SDA)
+        self.rotary = I2CRotary(
+          i2c=self.i2c,
+          int_pin=getattr(board, settings.rotary_int_pin),
+          address=settings.rotary_address,
+          reverse=settings.rotary_reverse,
+          handler=self.handle_rotary)
+      else:
+        self.rotary = PlainRotary(
+          pin_a=getattr(board, settings.rotary_pin_a),
+          pin_b=getattr(board, settings.rotary_pin_b),
+          button_pin=getattr(board, settings.rotary_button_bin),
+          reverse=settings.rotary_reverse,
+          handler=self.handle_rotary)
     if settings.buttons_enabled:
       button_pins = [
         getattr(board, pin) for pin in (
@@ -222,7 +230,9 @@ class App:
       self.oled.body = str(self.animator.speed)
     elif self.change_mode == 2:
       self.oled.header = 'Routine'
-      self.oled.body = self.animator.routine
+      title = self.animator.routine.replace('_', ' ')
+      title = title[:1].upper() + title[1:]
+      self.oled.body = title
     if not self.oled.display.is_awake:
       self.oled.display.wake()
 

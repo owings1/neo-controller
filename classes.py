@@ -11,6 +11,7 @@ import fontio
 import i2cdisplaybus
 import i2cencoderlibv21
 import keypad
+import rotaryio
 import terminalio
 import utils
 from adafruit_display_text.label import Label
@@ -25,8 +26,10 @@ __all__ = (
   'Animator',
   'Buttons',
   'Changer',
+  'I2CRotary',
   'KeyEvent',
   'Oled',
+  'PlainRotary',
   'Rotary')
 
 class Changer:
@@ -294,9 +297,17 @@ class KeyEvent(namedtuple('KeyEventBase', ('key', 'type', 'held'))):
   held: set[int]
 
 class Rotary:
+  handler: Callable[[str], None]|None = None
+
+  def run(self) -> bool:
+    return False
+
+  def deinit(self) -> None:
+    pass
+
+class I2CRotary(Rotary):
   encoder: I2CEncoderLibV21
   int: digitalio.DigitalInOut
-  handler: Callable[[str], None]|None = None
   config = i2cencoderlibv21.IPUP_DISABLE
 
   def __init__(
@@ -333,7 +344,6 @@ class Rotary:
     self.encoder.begin(self.config)
     self.encoder.write_antibounce_period(settings.rotary_antibounce_period)
     self.encoder.write_double_push_period(settings.rotary_double_push_period)
-
     self.encoder.autoconfig_interrupt()
 
   def run(self) -> bool:
@@ -344,6 +354,75 @@ class Rotary:
 
   def deinit(self) -> None:
     self.int.deinit()
+
+class PlainRotary(Rotary):
+  encoder: rotaryio.IncrementalEncoder
+  button: digitalio.DigitalInOut
+  last_pos: int
+  button_state: bool = False
+  first_push_at: int|None = None
+  last_release_at: int|None = None
+  last_push_at: int|None = None
+
+  def __init__(
+    self,
+    pin_a: Pin,
+    pin_b: Pin,
+    button_pin: Pin,
+    reverse: bool = False,
+    handler: Callable[[str], None]|None = None,
+  ) -> None:
+    self.handler = handler
+    if reverse:
+      pin_a, pin_b = pin_b, pin_a
+    self.encoder = rotaryio.IncrementalEncoder(pin_a, pin_b, settings.rotary_divisor)
+    self.last_pos = self.encoder.position
+    self.button = digitalio.DigitalInOut(button_pin)
+    self.button.direction = digitalio.Direction.INPUT
+    self.button.pull = digitalio.Pull.UP
+
+  def run(self) -> bool:
+    if self.last_release_at:
+      if ticks_diff(ticks_ms(), self.first_push_at) > settings.rotary_double_push_period * 10:
+        self.first_push_at = None
+        self.last_release_at = None
+        self.emit('push')
+        self.emit('release')
+        return True
+    pos = self.encoder.position
+    change, self.last_pos = pos - self.last_pos, pos
+    if change > 0:
+      self.emit('increment')
+      return True
+    if change < 0:
+      self.emit('decrement')
+      return True
+    if not self.button.value and not self.button_state:
+      self.button_state = True
+      self.last_push_at = ticks_ms()
+      return False
+    if self.button.value and self.button_state:
+      self.button_state = False
+      if self.last_release_at:
+        if ticks_diff(ticks_ms(), self.first_push_at) <= settings.rotary_double_push_period * 10:
+          self.first_push_at = None
+          self.last_release_at = None
+          self.emit('double_push')
+          return True
+      self.first_push_at = self.last_push_at
+      self.last_release_at = ticks_ms()
+      return False
+    return False
+
+  def emit(self, event: str) -> None:
+    if self.handler:
+      self.handler(event)
+    else:
+      print(f'{event=}')
+
+  def deinit(self) -> None:
+    self.encoder.deinit()
+    self.button.deinit()
 
 class Oled:
   display: SSD1306

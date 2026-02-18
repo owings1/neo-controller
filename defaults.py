@@ -25,11 +25,18 @@ b2_pin = 'D4'
 
 # Rotary settings
 rotary_enabled = False
-rotary_int_pin = 'D3'
-rotary_address = 0x30
 rotary_reverse = False
 rotary_antibounce_period = 25
 rotary_double_push_period = 50
+# I2C rotary (duppa.net)
+rotary_i2c = True
+rotary_int_pin = 'D3'
+rotary_address = 0x30
+# Plain rotary (when rotary_i2c=False)
+rotary_pin_a = 'D0'
+rotary_pin_b = 'D1'
+rotary_button_bin = 'D2'
+rotary_divisor = 2
 
 # OLED settings
 oled_enabled = False
