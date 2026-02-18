@@ -31,5 +31,12 @@ rotary_reverse = False
 rotary_antibounce_period = 25
 rotary_double_push_period = 50
 
+# OLED settings
+oled_enabled = False
+oled_address = 0x3c
+oled_width = 128
+oled_height = 64
+oled_line_spacing = 4
+
 # Other settings
 idle_ms = 10_000

@@ -6,9 +6,15 @@ import time
 from collections import namedtuple
 
 import digitalio
+import displayio
+import fontio
+import i2cdisplaybus
 import i2cencoderlibv21
 import keypad
+import terminalio
 import utils
+from adafruit_display_text.label import Label
+from adafruit_displayio_ssd1306 import SSD1306
 from adafruit_ticks import ticks_diff, ticks_ms
 from busio import I2C
 from i2cencoderlibv21 import I2CEncoderLibV21
@@ -20,6 +26,7 @@ __all__ = (
   'Buttons',
   'Changer',
   'KeyEvent',
+  'Oled',
   'Rotary')
 
 class Changer:
@@ -230,14 +237,7 @@ class PathAnimation(Animation):
         yield gennext()
     super().__init__(pixels, interval, bufiter())
 
-class IdleMixin:
-  last_event_at: int = 0
-
-  @property
-  def idle_ms(self) -> int:
-    return ticks_diff(ticks_ms(), self.last_event_at)
-
-class Buttons(IdleMixin):
+class Buttons:
   keys: keypad.Keys
   long_duration_ms: int = settings.buttons_long_duration_ms
   handler: Callable[[KeyEvent], None]|None = None
@@ -274,7 +274,6 @@ class Buttons(IdleMixin):
     keyevent = KeyEvent(event.key_number, presstype, held)
     if self.handler:
       self.handler(keyevent)
-    self.last_event_at = ticks_ms()
     return keyevent
 
   def deinit(self) -> None:
@@ -294,7 +293,7 @@ class KeyEvent(namedtuple('KeyEventBase', ('key', 'type', 'held'))):
   type: str
   held: set[int]
 
-class Rotary(IdleMixin):
+class Rotary:
   encoder: I2CEncoderLibV21
   int: digitalio.DigitalInOut
   handler: Callable[[str], None]|None = None
@@ -323,7 +322,6 @@ class Rotary(IdleMixin):
           self.handler(event)
         else:
           print(f'{event=}')
-        self.last_event_at = ticks_ms()
       return handler
 
     self.encoder.onIncrement = make_handler('increment')
@@ -346,6 +344,75 @@ class Rotary(IdleMixin):
 
   def deinit(self) -> None:
     self.int.deinit()
+
+class Oled:
+  display: SSD1306
+
+  def __init__(
+    self,
+    i2c: I2C,
+    address: int,
+    width: int,
+    height: int,
+    line_spacing: int = 4,
+    font: fontio.FontProtocol = terminalio.FONT,
+  ) -> None:
+    self.display = SSD1306(
+      bus=i2cdisplaybus.I2CDisplayBus(
+        i2c_bus=i2c,
+        device_address=address),
+      width=width,
+      height=height)
+    self.splash = displayio.Group()
+    self.display.root_group = self.splash
+    grid = displayio.TileGrid(
+      displayio.Bitmap(width, height, 1),
+      pixel_shader=displayio.Palette(1))
+    grid.pixel_shader[0] = 0x0
+    self.splash.append(grid)
+    fbb = font.get_bounding_box()
+    self.text_width = width // fbb[0]
+    self.labels = (
+      Label(
+        font,
+        text=' ' * self.text_width,
+        color=0xffffff,
+        x=0,
+        y=fbb[1] // 2),
+      Label(
+        font,
+        text=' ' * self.text_width,
+        color=0xffffff,
+        x=0,
+        y=fbb[1] // 2 + fbb[1] + line_spacing + 1))      
+    for label in self.labels:
+      self.splash.append(label)
+
+  @property
+  def header(self) -> str:
+    return self.labels[0].text.strip()
+
+  @header.setter
+  def header(self, value: str) -> None:
+    value = value[:self.text_width]
+    if self.labels[0].text != value:
+      self.labels[0].text = value
+
+  @property
+  def body(self) -> str:
+    return self.labels[1].text.strip()
+
+  @body.setter
+  def body(self, value: str) -> None:
+    value = value[:self.text_width]
+    if self.labels[1].text != value:
+      self.labels[1].text = value
+
+  def deinit(self) -> None:
+    for _ in self.labels:
+      self.splash.pop()
+    self.display.refresh()
+    self.display.sleep()
 
 # Typing
 try:

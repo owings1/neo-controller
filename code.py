@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import board
 import busio
+import displayio
 import keypad
+from adafruit_ticks import ticks_diff, ticks_ms
 from classes import *
 from neopixel import NeoPixel
 from neopixel_spi import NeoPixel_SPI
@@ -17,7 +19,9 @@ class App:
   buttons: Buttons|None = None
   rotary: Rotary|None = None
   i2c: busio.I2C|None = None
+  oled: Oled|None = None
   change_mode: int = 0
+  last_active_ms: int = 0
 
   def main(self) -> None:
     try:
@@ -52,7 +56,7 @@ class App:
       auto_write=False,
       pixel_order=settings.pixel_order)
     if settings.rotary_enabled:
-      self.i2c = busio.I2C(board.SCL, board.SDA)
+      self.i2c = self.i2c or busio.I2C(board.SCL, board.SDA)
       self.rotary = Rotary(
         i2c=self.i2c,
         int_pin=getattr(board, settings.rotary_int_pin),
@@ -74,9 +78,19 @@ class App:
       self.buttons = Buttons(
         keys=self.keys,
         handler=self.handle_button)
+    if settings.oled_enabled:
+      self.i2c = self.i2c or busio.I2C(board.SCL, board.SDA)
+      self.oled = Oled(
+        i2c=self.i2c,
+        address=settings.oled_address,
+        width=settings.oled_width,
+        height=settings.oled_height,
+        line_spacing=settings.oled_line_spacing)
     self.changer = Changer(self.pixels)
     self.animator = Animator(self.pixels)
     self.animator.routine = settings.initial_routine
+    self.draw_display()
+    self.last_active_ms = ticks_ms()
   
   def deinit(self) -> None:
     if self.changer:
@@ -93,6 +107,9 @@ class App:
       self.keys.deinit()
     if self.rotary:
       self.rotary.deinit()
+    if self.oled:
+      self.oled.deinit()
+    displayio.release_displays()
     if self.i2c:
       self.i2c.deinit()
     self.change_mode = 0
@@ -100,14 +117,28 @@ class App:
   def loop(self) -> None:
     self.animator.run()
     if self.buttons and self.buttons.run():
+      self.last_active_ms = ticks_ms()
+      self.draw_display()
       return
     if self.rotary and self.rotary.run():
+      self.last_active_ms = ticks_ms()
+      self.draw_display()
       return
-    if self.change_mode != 0 and self.idle_ms > settings.idle_ms:
-      self.change_mode = 0
+    if self.idle_ms > settings.idle_ms:
+      if self.change_mode != 0:
+        self.change_mode = 0
+      if self.oled and self.oled.display.is_awake:
+        self.oled.display.sleep()
+
+  @property
+  def idle_ms(self) -> int:
+    return ticks_diff(ticks_ms(), self.last_active_ms)
 
   def handle_button(self, event: KeyEvent) -> None:
     print(f'{event=}')
+    if self.oled and not self.oled.display.is_awake:
+      self.oled.display.wake()
+      return
     if event.held:
       return
     if event.key == 2:
@@ -153,6 +184,11 @@ class App:
 
   def handle_rotary(self, event: str) -> None:
     print(f'{event=}')
+    if event == 'push':
+      return
+    if self.oled and not self.oled.display.is_awake:
+      self.oled.display.wake()
+      return
     if event == 'increment':
       if self.change_mode == 0:
         self.changer.brightness('plus', 1)
@@ -175,15 +211,20 @@ class App:
     elif event == 'double_push':
       self.change_mode = 0
 
-  @property
-  def idle_ms(self) -> int:
-    if self.buttons:
-      if self.rotary:
-        return min(self.buttons.idle_ms, self.rotary.idle_ms)
-      return self.buttons.idle_ms
-    if self.rotary:
-      return self.rotary.idle_ms
-    return 0
+  def draw_display(self) -> None:
+    if not self.oled:
+      return
+    if self.change_mode == 0:
+      self.oled.header = 'Brightness'
+      self.oled.body = str(self.pixels.brightness)
+    elif self.change_mode == 1:
+      self.oled.header = 'Speed'
+      self.oled.body = str(self.animator.speed)
+    elif self.change_mode == 2:
+      self.oled.header = 'Routine'
+      self.oled.body = self.animator.routine
+    if not self.oled.display.is_awake:
+      self.oled.display.wake()
 
 app = App()
 
