@@ -30,7 +30,7 @@ rotary_antibounce_period = 25
 rotary_double_push_period = 50
 # I2C rotary (duppa.net)
 rotary_i2c = True
-rotary_int_pin = 'D3'
+rotary_interrupt_pin = 'D3'
 rotary_address = 0x30
 # Plain rotary (when rotary_i2c=False)
 rotary_pin_a = 'D0'
@@ -38,12 +38,20 @@ rotary_pin_b = 'D1'
 rotary_button_bin = 'D2'
 rotary_divisor = 2
 
-# OLED settings
+# Display settings
 oled_enabled = False
-oled_address = 0x3c
 oled_width = 128
 oled_height = 64
 oled_line_spacing = 4
+oled_x_offset = 0
+oled_driver = 'SSD1306'
+oled_bus = 'I2C'
+# For I2C display
+oled_address = 0x3c
+# For SPI display
+oled_cs_pin = 'D7'
+oled_dc_pin = 'D0'
+oled_reset_pin = 'D1'
 
 # Other settings
 idle_ms = 10_000

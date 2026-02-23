@@ -2,19 +2,19 @@ from __future__ import annotations
 
 import board
 import busio
-import displayio
 import keypad
 from adafruit_ticks import ticks_diff, ticks_ms
-from classes import *
 from neopixel import NeoPixel
-from neopixel_spi import NeoPixel_SPI
-from utils import settings
+
+from classes import *
+from utils import as_pin, settings
+
 
 class App:
   animator: Animator|None = None
   changer: Changer|None = None
   spi: busio.SPI|None = None
-  pixels: NeoPixel|NeoPixel_SPI|None = None
+  pixels: NeoPixel|None = None
   keys: keypad.Keys|None = None
   buttons: Buttons|None = None
   rotary: Rotary|None = None
@@ -42,38 +42,35 @@ class App:
       f'on {settings.data_pin} '
       f'{initial_brightness=}')
     if settings.data_pin == 'SPI':
-      self.spi = busio.SPI(
-        clock=board.SCK,
-        MOSI=board.MOSI,
-        MISO=board.MISO)
-      neocls = NeoPixel_SPI
+      from neopixel_spi import NeoPixel_SPI as NeoPixel
+      self.spi = board.SPI()
     else:
-      neocls = NeoPixel
-    self.pixels = neocls(
-      self.spi or settings.data_pin,
+      from neopixel import NeoPixel
+    self.pixels = NeoPixel(
+      self.spi or as_pin(settings.data_pin),
       settings.num_pixels,
       brightness=initial_brightness,
       auto_write=False,
       pixel_order=settings.pixel_order)
     if settings.rotary_enabled:
       if settings.rotary_i2c:
-        self.i2c = self.i2c or busio.I2C(board.SCL, board.SDA)
+        self.i2c = board.I2C()
         self.rotary = I2CRotary(
           i2c=self.i2c,
-          int_pin=getattr(board, settings.rotary_int_pin),
+          interrupt_pin=settings.rotary_interrupt_pin,
           address=settings.rotary_address,
           reverse=settings.rotary_reverse,
           handler=self.handle_rotary)
       else:
         self.rotary = PlainRotary(
-          pin_a=getattr(board, settings.rotary_pin_a),
-          pin_b=getattr(board, settings.rotary_pin_b),
-          button_pin=getattr(board, settings.rotary_button_bin),
+          pin_a=settings.rotary_pin_a,
+          pin_b=settings.rotary_pin_b,
+          button_pin=settings.rotary_button_bin,
           reverse=settings.rotary_reverse,
           handler=self.handle_rotary)
     if settings.buttons_enabled:
       button_pins = [
-        getattr(board, pin) for pin in (
+        as_pin(pin) for pin in (
           settings.b0_pin,
           settings.b1_pin,
           settings.b2_pin)]
@@ -87,13 +84,29 @@ class App:
         keys=self.keys,
         handler=self.handle_button)
     if settings.oled_enabled:
-      self.i2c = self.i2c or busio.I2C(board.SCL, board.SDA)
+      if settings.oled_bus == 'I2C':
+        from i2cdisplaybus import I2CDisplayBus
+        self.i2c = board.I2C()
+        display_bus = I2CDisplayBus(
+          i2c_bus=self.i2c,
+          device_address=settings.oled_address)
+      elif settings.oled_bus == 'SPI':
+        from fourwire import FourWire
+        self.spi = board.SPI()
+        display_bus = FourWire(
+          spi_bus=self.spi,
+          command=as_pin(settings.oled_dc_pin),
+          chip_select=as_pin(settings.oled_cs_pin),
+          reset=as_pin(settings.oled_reset_pin))
+      else:
+        raise RuntimeError(f'Invalid display bus type: {settings.oled_bus}')
       self.oled = Oled(
-        i2c=self.i2c,
-        address=settings.oled_address,
+        bus=display_bus,
+        driver=settings.oled_driver,
         width=settings.oled_width,
         height=settings.oled_height,
-        line_spacing=settings.oled_line_spacing)
+        line_spacing=settings.oled_line_spacing,
+        x_offset=settings.oled_x_offset)
     self.changer = Changer(self.pixels)
     self.animator = Animator(self.pixels)
     self.animator.routine = settings.initial_routine
@@ -105,8 +118,6 @@ class App:
       self.changer.deinit()
     if self.pixels:
       self.pixels.deinit()
-    if self.spi:
-      self.spi.deinit()
     if self.animator:
       self.animator.deinit()
     if self.buttons:
@@ -117,9 +128,12 @@ class App:
       self.rotary.deinit()
     if self.oled:
       self.oled.deinit()
-    displayio.release_displays()
+      import displayio
+      displayio.release_displays()
     if self.i2c:
       self.i2c.deinit()
+    if self.spi:
+      self.spi.deinit()
     self.change_mode = 0
 
   def loop(self) -> None:
@@ -135,8 +149,8 @@ class App:
     if self.idle_ms > settings.idle_ms:
       if self.change_mode != 0:
         self.change_mode = 0
-      if self.oled and self.oled.display.is_awake:
-        self.oled.display.sleep()
+      if self.oled:
+        self.oled.sleep()
 
   @property
   def idle_ms(self) -> int:
@@ -144,8 +158,8 @@ class App:
 
   def handle_button(self, event: KeyEvent) -> None:
     print(f'{event=}')
-    if self.oled and not self.oled.display.is_awake:
-      self.oled.display.wake()
+    if self.oled and not self.oled.is_awake:
+      self.oled.wake()
       return
     if event.held:
       return
@@ -194,8 +208,8 @@ class App:
     print(f'{event=}')
     if event == 'push':
       return
-    if self.oled and not self.oled.display.is_awake:
-      self.oled.display.wake()
+    if self.oled and not self.oled.is_awake:
+      self.oled.wake()
       return
     if event == 'increment':
       if self.change_mode == 0:
@@ -233,8 +247,7 @@ class App:
       title = self.animator.routine.replace('_', ' ')
       title = title[:1].upper() + title[1:]
       self.oled.body = title
-    if not self.oled.display.is_awake:
-      self.oled.display.wake()
+    self.oled.wake()
 
 app = App()
 

@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+import board
+from microcontroller import Pin
+
+def as_pin(pin: str|Pin) -> Pin:
+  if isinstance(pin, str):
+    pin = getattr(board, pin)
+  return pin
+
 def resolve_index_change(verb: str, quantity: int|None, current: int|None, length: int, loop: bool) -> int|None:
   if verb == 'min':
     return 0
@@ -94,6 +102,16 @@ def init_settings(defaults: MT, settings: ModuleType) -> MT:
 import defaults
 import settings
 settings = init_settings(defaults, settings)
+
+def i2c_scan():
+  i2c = board.I2C()
+  while not i2c.try_lock():
+    pass
+  try:
+    for addr in i2c.scan():
+      print(f'{hex(addr)}')
+  finally:
+    i2c.unlock()
 
 # IDE Environment
 try:

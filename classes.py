@@ -5,22 +5,20 @@ import random
 import time
 from collections import namedtuple
 
-import digitalio
 import displayio
 import fontio
-import i2cdisplaybus
-import i2cencoderlibv21
 import keypad
-import rotaryio
 import terminalio
-import utils
-from adafruit_display_text.label import Label
-from adafruit_displayio_ssd1306 import SSD1306
 from adafruit_ticks import ticks_diff, ticks_ms
+from busdisplay import BusDisplay
 from busio import I2C
-from i2cencoderlibv21 import I2CEncoderLibV21
+from digitalio import DigitalInOut, Direction, Pull
+from fourwire import FourWire
+from i2cdisplaybus import I2CDisplayBus
 from microcontroller import Pin
-from utils import ColorType, settings
+
+import utils
+from utils import ColorType, as_pin, settings
 
 __all__ = (
   'Animator',
@@ -306,26 +304,27 @@ class Rotary:
     pass
 
 class I2CRotary(Rotary):
-  encoder: I2CEncoderLibV21
-  int: digitalio.DigitalInOut
-  config = i2cencoderlibv21.IPUP_DISABLE
+  encoder: i2cencoderlibv21.I2CEncoderLibV21
+  interrupt: DigitalInOut
 
   def __init__(
     self,
     i2c: I2C,
-    int_pin: Pin,
+    interrupt_pin: str|Pin,
     address: int,
     reverse: bool = False,
     handler: Callable[[str], None]|None = None,
   ) -> None:
-    self.encoder = I2CEncoderLibV21(i2c, address)
+    import i2cencoderlibv21
+    self.encoder = i2cencoderlibv21.I2CEncoderLibV21(i2c, address)
     self.encoder.reset()
-    self.int = digitalio.DigitalInOut(int_pin)
-    self.int.direction = digitalio.Direction.INPUT
-    self.int.pull = digitalio.Pull.UP
+    self.interrupt = DigitalInOut(as_pin(interrupt_pin))
+    self.interrupt.direction = Direction.INPUT
+    self.interrupt.pull = Pull.UP
     self.handler = handler
+    config = i2cencoderlibv21.IPUP_DISABLE
     if reverse:
-      self.config |= i2cencoderlibv21.DIRE_LEFT
+      config |= i2cencoderlibv21.DIRE_LEFT
 
     def make_handler(event: str):
       def handler():
@@ -340,50 +339,56 @@ class I2CRotary(Rotary):
     self.encoder.onButtonRelease = make_handler('release')
     self.encoder.onButtonPush = make_handler('push')
     self.encoder.onButtonDoublePush = make_handler('double_push')
+    # Ensure reset is complete, 400us
     time.sleep(0.001)
-    self.encoder.begin(self.config)
+    self.encoder.begin(config)
     self.encoder.write_antibounce_period(settings.rotary_antibounce_period)
     self.encoder.write_double_push_period(settings.rotary_double_push_period)
     self.encoder.autoconfig_interrupt()
 
   def run(self) -> bool:
-    if not self.int.value:
+    if not self.interrupt.value:
       self.encoder.update_status()
       return True
     return False
 
   def deinit(self) -> None:
-    self.int.deinit()
+    self.interrupt.deinit()
 
 class PlainRotary(Rotary):
   encoder: rotaryio.IncrementalEncoder
-  button: digitalio.DigitalInOut
+  button: DigitalInOut
   last_pos: int
   button_state: bool = False
   first_push_at: int|None = None
   last_release_at: int|None = None
   last_push_at: int|None = None
+  double_push_period: int = settings.rotary_double_push_period * 10
 
   def __init__(
     self,
-    pin_a: Pin,
-    pin_b: Pin,
-    button_pin: Pin,
+    pin_a: str|Pin,
+    pin_b: str|Pin,
+    button_pin: str|Pin,
     reverse: bool = False,
     handler: Callable[[str], None]|None = None,
   ) -> None:
+    import rotaryio
     self.handler = handler
     if reverse:
       pin_a, pin_b = pin_b, pin_a
-    self.encoder = rotaryio.IncrementalEncoder(pin_a, pin_b, settings.rotary_divisor)
+    self.encoder = rotaryio.IncrementalEncoder(
+      as_pin(pin_a),
+      as_pin(pin_b),
+      settings.rotary_divisor)
     self.last_pos = self.encoder.position
-    self.button = digitalio.DigitalInOut(button_pin)
-    self.button.direction = digitalio.Direction.INPUT
-    self.button.pull = digitalio.Pull.UP
+    self.button = DigitalInOut(as_pin(button_pin))
+    self.button.direction = Direction.INPUT
+    self.button.pull = Pull.UP
 
   def run(self) -> bool:
     if self.last_release_at:
-      if ticks_diff(ticks_ms(), self.first_push_at) > settings.rotary_double_push_period * 10:
+      if ticks_diff(ticks_ms(), self.first_push_at) > self.double_push_period:
         self.first_push_at = None
         self.last_release_at = None
         self.emit('push')
@@ -404,7 +409,7 @@ class PlainRotary(Rotary):
     if self.button.value and self.button_state:
       self.button_state = False
       if self.last_release_at:
-        if ticks_diff(ticks_ms(), self.first_push_at) <= settings.rotary_double_push_period * 10:
+        if ticks_diff(ticks_ms(), self.first_push_at) <= self.double_push_period:
           self.first_push_at = None
           self.last_release_at = None
           self.emit('double_push')
@@ -425,77 +430,126 @@ class PlainRotary(Rotary):
     self.button.deinit()
 
 class Oled:
-  display: SSD1306
+  display: BusDisplay
+  driver: str
+  sleepable: bool
+  text_width: int
+  lines: tuple[Label, Label]
 
   def __init__(
     self,
-    i2c: I2C,
-    address: int,
+    bus: I2CDisplayBus|FourWire,
+    driver: str,
     width: int,
     height: int,
     line_spacing: int = 4,
+    x_offset: int = 0,
     font: fontio.FontProtocol = terminalio.FONT,
   ) -> None:
-    self.display = SSD1306(
-      bus=i2cdisplaybus.I2CDisplayBus(
-        i2c_bus=i2c,
-        device_address=address),
+    if driver == 'SSD1305':
+      from adafruit_displayio_ssd1305 import SSD1305 as Driver
+    elif driver == 'SSD1306':
+      from adafruit_displayio_ssd1306 import SSD1306 as Driver
+    elif driver == 'SH1106':
+      from adafruit_displayio_sh1106 import SH1106 as Driver
+    elif driver == 'SH1107':
+      from adafruit_displayio_sh1107 import SH1107 as Driver
+    elif driver == 'ST7735':
+      from adafruit_st7735 import ST7735 as Driver
+    elif driver == 'ST7735R':
+      from adafruit_st7735r import ST7735R as Driver
+    else:
+      raise RuntimeError(f'Unsupported driver: {driver}')
+    from adafruit_display_text.label import Label
+    self.driver = driver
+    self.display = Driver(
+      bus=bus,
       width=width,
       height=height)
-    self.splash = displayio.Group()
-    self.display.root_group = self.splash
-    grid = displayio.TileGrid(
-      displayio.Bitmap(width, height, 1),
-      pixel_shader=displayio.Palette(1))
-    grid.pixel_shader[0] = 0x0
-    self.splash.append(grid)
+    self.sleepable = hasattr(self.display, 'sleep')
+    self.display.root_group = displayio.Group()
+    # Clear display
+    blank_palette = displayio.Palette(1)
+    blank_palette[0] = 0x0
+    self.display.root_group.append(
+      displayio.TileGrid(
+        displayio.Bitmap(width, height, 1),
+        pixel_shader=blank_palette,
+        x=x_offset))
     fbb = font.get_bounding_box()
-    self.text_width = width // fbb[0]
-    self.labels = (
+    self.text_width = (width - x_offset) // fbb[0]
+    self.lines = (
       Label(
         font,
         text=' ' * self.text_width,
         color=0xffffff,
-        x=0,
+        x=x_offset,
         y=fbb[1] // 2),
       Label(
         font,
         text=' ' * self.text_width,
         color=0xffffff,
-        x=0,
+        x=x_offset,
         y=fbb[1] // 2 + fbb[1] + line_spacing + 1))      
-    for label in self.labels:
-      self.splash.append(label)
+    for label in self.lines:
+      self.display.root_group.append(label)
 
   @property
   def header(self) -> str:
-    return self.labels[0].text.strip()
+    return self.lines[0].text.strip()
 
   @header.setter
   def header(self, value: str) -> None:
     value = value[:self.text_width]
-    if self.labels[0].text != value:
-      self.labels[0].text = value
+    if self.lines[0].text != value:
+      self.lines[0].text = value
 
   @property
   def body(self) -> str:
-    return self.labels[1].text.strip()
+    return self.lines[1].text.strip()
 
   @body.setter
   def body(self, value: str) -> None:
     value = value[:self.text_width]
-    if self.labels[1].text != value:
-      self.labels[1].text = value
+    if self.lines[1].text != value:
+      self.lines[1].text = value
 
   def deinit(self) -> None:
-    for _ in self.labels:
-      self.splash.pop()
+    for _ in self.lines:
+      self.display.root_group.pop()
     self.display.refresh()
-    self.display.sleep()
+    self.sleep()
+
+  def sleep(self) -> None:
+    if self.sleepable:
+      if self.driver == 'SH1106':
+        # Patch for bug in SH1106 driver: TypeError: object with buffer protocol required
+        if self.display._is_awake:
+          self.display.bus.send(0xae, b'')
+          self.display._is_awake = False
+      else:
+        self.display.sleep()
+
+  def wake(self) -> None:
+    if self.sleepable:
+      if self.driver == 'SH1106':
+        # Patch for bug in SH1106 driver: TypeError: object with buffer protocol required
+        if not self.display._is_awake:
+          self.display.bus.send(0xaf, b'')
+          self.display._is_awake = True
+      else:
+        self.display.wake()
+
+  @property
+  def is_awake(self) -> bool:
+    return not self.sleepable or self.display.is_awake
 
 # Typing
 try:
-  from neopixel import NeoPixel
   from typing import Callable, ClassVar, Iterable, Sequence
+  from neopixel import NeoPixel
+  from adafruit_display_text.label import Label
+  import i2cencoderlibv21
+  import rotaryio # not available on ESP32C3
 except ImportError:
   pass
