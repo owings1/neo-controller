@@ -454,23 +454,9 @@ class Oled:
     x_offset: int = 0,
     font: fontio.FontProtocol = terminalio.FONT,
   ) -> None:
-    if driver == 'SSD1305':
-      from adafruit_displayio_ssd1305 import SSD1305 as Driver
-    elif driver == 'SSD1306':
-      from adafruit_displayio_ssd1306 import SSD1306 as Driver
-    elif driver == 'SH1106':
-      from adafruit_displayio_sh1106 import SH1106 as Driver
-    elif driver == 'SH1107':
-      from adafruit_displayio_sh1107 import SH1107 as Driver
-    elif driver == 'ST7735':
-      from adafruit_st7735 import ST7735 as Driver
-    elif driver == 'ST7735R':
-      from adafruit_st7735r import ST7735R as Driver
-    else:
-      raise RuntimeError(f'Unsupported driver: {driver}')
     from adafruit_display_text.label import Label
     self.driver = driver
-    self.display = Driver(
+    self.display = self.get_display_class(driver)(
       bus=bus,
       width=width,
       height=height)
@@ -551,6 +537,24 @@ class Oled:
   @property
   def is_awake(self) -> bool:
     return not self.sleepable or self.display.is_awake
+
+  @staticmethod
+  def get_display_class(driver: str) -> type[BusDisplay]:
+    if driver == 'SSD1305':
+      from adafruit_displayio_ssd1305 import SSD1305 as Display
+    elif driver == 'SSD1306':
+      from adafruit_displayio_ssd1306 import SSD1306 as Display
+    elif driver == 'SH1106':
+      from adafruit_displayio_sh1106 import SH1106 as Display
+    elif driver == 'SH1107':
+      from adafruit_displayio_sh1107 import SH1107 as Display
+    elif driver == 'ST7735':
+      from adafruit_st7735 import ST7735 as Display
+    elif driver == 'ST7735R':
+      from adafruit_st7735r import ST7735R as Display
+    else:
+      raise ValueError(f'Unsupported driver: {driver}')
+    return Display
 
 # Typing
 try:
