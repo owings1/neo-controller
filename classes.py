@@ -31,9 +31,9 @@ __all__ = (
   'Rotary')
 
 class Changer:
-  pixels: NeoPixel
+  pixels: NeoPixelType
 
-  def __init__(self, pixels: NeoPixel) -> None:
+  def __init__(self, pixels: NeoPixelType) -> None:
     self.pixels = pixels
 
   def deinit(self) -> None:
@@ -66,12 +66,12 @@ class Animator:
     'blue_loop',
     'green_loop',
     'rando')
-  pixels: NeoPixel
+  pixels: NeoPixelType
   anim: Animation|None = None
   _speed: int
   _routine: str|None = None
   
-  def __init__(self, pixels: NeoPixel) -> None:
+  def __init__(self, pixels: NeoPixelType) -> None:
     self.pixels = pixels
     self.speed = settings.initial_speed
 
@@ -188,13 +188,13 @@ class Animator:
     return anim
 
 class Animation:
-  pixels: NeoPixel
+  pixels: NeoPixelType
   interval: int
   at: int|None = None
   it: Iterable[Iterable[ColorType]]
   interval_coeff: int = 1
 
-  def __init__(self, pixels: NeoPixel, interval: int, it: Iterable[Iterable[ColorType]]) -> None:
+  def __init__(self, pixels: NeoPixelType, interval: int, it: Iterable[Iterable[ColorType]]) -> None:
     self.pixels = pixels
     self.interval = interval
     self.it = it
@@ -224,7 +224,7 @@ class Animation:
 class PathAnimation(Animation):
   'Transition through color path'
 
-  def __init__(self, pixels: NeoPixel, path: Iterable[ColorType], interval: int, steps: int) -> None:
+  def __init__(self, pixels: NeoPixelType, path: Iterable[ColorType], interval: int, steps: int) -> None:
     def bufiter():
       trit = utils.transitions(path, steps)
       yield (next(trit) for _ in self.pixels)
@@ -243,8 +243,15 @@ class Buttons:
   long_duration_ms: int = settings.buttons_long_duration_ms
   handler: Callable[[KeyEvent], None]|None = None
 
-  def __init__(self, keys: keypad.Keys, handler: Callable[[KeyEvent], None]|None = None):
-    self.keys = keys
+  def __init__(self, pins: Sequence[str|Pin], reverse: bool = False, handler: Callable[[KeyEvent], None]|None = None):
+    pins = [as_pin(pin) for pin in pins]
+    if reverse:
+      pins.reverse()
+
+    self.keys = keypad.Keys(
+      pins,
+      value_when_pressed=False,
+      pull=True)
     self.handler = handler
     self.states = [KeyState() for _ in range(self.keys.key_count)]
 
@@ -280,6 +287,7 @@ class Buttons:
   def deinit(self) -> None:
     for state in self.states:
       state.clear()
+    self.keys.deinit()
 
 class KeyState:
   pressed_at: int|None = None
@@ -525,7 +533,7 @@ class Oled:
       if self.driver == 'SH1106':
         # Patch for bug in SH1106 driver: TypeError: object with buffer protocol required
         if self.display._is_awake:
-          self.display.bus.send(0xae, b'')
+          self.display.bus.send(0xae, bytearray())
           self.display._is_awake = False
       else:
         self.display.sleep()
@@ -535,7 +543,7 @@ class Oled:
       if self.driver == 'SH1106':
         # Patch for bug in SH1106 driver: TypeError: object with buffer protocol required
         if not self.display._is_awake:
-          self.display.bus.send(0xaf, b'')
+          self.display.bus.send(0xaf, bytearray())
           self.display._is_awake = True
       else:
         self.display.wake()
@@ -546,10 +554,11 @@ class Oled:
 
 # Typing
 try:
-  from typing import Callable, ClassVar, Iterable, Sequence
-  from neopixel import NeoPixel
+  from typing import Callable, ClassVar, Iterable, Sequence, TYPE_CHECKING
+  from neopixel import NeoPixel as NeoPixelType
   from adafruit_display_text.label import Label
   import i2cencoderlibv21
   import rotaryio # not available on ESP32C3
+  __all__ += ('NeoPixelType',)
 except ImportError:
   pass

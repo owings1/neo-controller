@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import board
 import busio
-import keypad
 from adafruit_ticks import ticks_diff, ticks_ms
-from neopixel import NeoPixel
 
 from classes import *
 from utils import as_pin, settings
@@ -14,8 +12,7 @@ class App:
   animator: Animator|None = None
   changer: Changer|None = None
   spi: busio.SPI|None = None
-  pixels: NeoPixel|None = None
-  keys: keypad.Keys|None = None
+  pixels: NeoPixelType|None = None
   buttons: Buttons|None = None
   rotary: Rotary|None = None
   i2c: busio.I2C|None = None
@@ -69,19 +66,12 @@ class App:
           reverse=settings.rotary_reverse,
           handler=self.handle_rotary)
     if settings.buttons_enabled:
-      button_pins = [
-        as_pin(pin) for pin in (
+      self.buttons = Buttons(
+        pins=(
           settings.b0_pin,
           settings.b1_pin,
-          settings.b2_pin)]
-      if settings.buttons_reversed:
-        button_pins.reverse()
-      self.keys = keypad.Keys(
-        button_pins,
-        value_when_pressed=False,
-        pull=True)
-      self.buttons = Buttons(
-        keys=self.keys,
+          settings.b2_pin),
+        reverse=settings.buttons_reversed,
         handler=self.handle_button)
     if settings.oled_enabled:
       if settings.oled_bus == 'I2C':
@@ -122,8 +112,6 @@ class App:
       self.animator.deinit()
     if self.buttons:
       self.buttons.deinit()
-    if self.keys:
-      self.keys.deinit()
     if self.rotary:
       self.rotary.deinit()
     if self.oled:
