@@ -226,7 +226,7 @@ class App:
       return
     if self.change_mode == 0:
       self.oled.header = 'Brightness'
-      self.oled.body = str(self.pixels.brightness)
+      self.oled.body = f'{round(self.pixels.brightness * 100):>3}'
     elif self.change_mode == 1:
       self.oled.header = 'Speed'
       self.oled.body = str(self.animator.speed)
