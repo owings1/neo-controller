@@ -101,7 +101,6 @@ class Animator:
     func = getattr(self, f'anim_{value}')
     self.clear()
     self.anim = func()
-    self.anim.start()
     self._routine = value
     print(f'routine={self.routine}')
 
@@ -190,36 +189,43 @@ class Animator:
 class Animation:
   pixels: NeoPixelType
   interval: int
-  at: int|None = None
+  last_tick: int|None = None
   it: Iterable[Iterable[ColorType]]
   interval_coeff: int = 1
+  ticked: bool = False
 
   def __init__(self, pixels: NeoPixelType, interval: int, it: Iterable[Iterable[ColorType]]) -> None:
     self.pixels = pixels
     self.interval = interval
     self.it = it
 
-  def start(self) -> None:
-    self.at = time.monotonic_ns()
-
   def ready(self) -> bool:
-    return self.at is not None and time.monotonic_ns() - self.at >= 0
+    if not self.last_tick:
+      return True
+    at = self.last_tick + self.interval * 1000 * settings.min_micros_interval * self.interval_coeff
+    return at is not None and time.monotonic_ns() - at >= 0
 
   def run(self) -> bool:
     if self.ready():
       self.tick()
-      self.at = time.monotonic_ns() + self.interval * 1000 * settings.min_micros_interval * self.interval_coeff
       return True
     return False
 
   def tick(self) -> None:
     change = False
-    for p, value in enumerate(next(self.it)):
+    for p, value in enumerate(next(self)):
       if change or self.pixels[p] != utils.as_tuple(value):
         change = True
         self.pixels[p] = value
     if change:
-      self.pixels.show()   
+      self.pixels.show()
+    self.last_tick = time.monotonic_ns()
+
+  def __iter__(self):
+    return self
+
+  def __next__(self):
+    return next(self.it)
 
 class PathAnimation(Animation):
   'Transition through color path'
@@ -303,6 +309,8 @@ class KeyEvent(namedtuple('KeyEventBase', ('key', 'type', 'held'))):
   held: set[int]
 
 class Rotary:
+  'Base class for I2CRotary & PlainRotary'
+
   handler: Callable[[str], None]|None = None
 
   def run(self) -> bool:
