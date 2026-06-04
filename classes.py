@@ -110,7 +110,10 @@ class Animator:
   def run(self) -> bool:
     if self.anim:
       try:
-        return self.anim.run()
+        if self.anim.ready():
+          self.anim.tick()
+          return True
+        return False
       except StopIteration:
         self.clear()
     return False
@@ -204,12 +207,6 @@ class Animation:
       return True
     at = self.last_tick + self.interval * 1000 * settings.min_micros_interval * self.interval_coeff
     return at is not None and time.monotonic_ns() - at >= 0
-
-  def run(self) -> bool:
-    if self.ready():
-      self.tick()
-      return True
-    return False
 
   def tick(self) -> None:
     change = False
