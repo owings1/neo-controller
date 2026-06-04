@@ -5,11 +5,11 @@ data_pin = 'SPI'
 
 # Brightness settings
 brightness_scale = 0x20
-initial_brightness = brightness_scale // 5
+initial_brightness = brightness_scale // 2
 
 # Animation settings
 speeds = range(0x100, 0, -0x8)
-initial_speed = len(speeds) // 2 - 1
+initial_speed = len(speeds) // 2
 initial_routine = 'wheel_loop'
 min_micros_interval = 700
 transition_steps = 0x80
