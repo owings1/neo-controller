@@ -61,11 +61,16 @@ class Changer:
 
 class Animator:
   routines: ClassVar[Sequence[str]] = (
-    'wheel_loop',
-    'red_loop',
-    'blue_loop',
-    'green_loop',
-    'white_loop',
+    'wheel_solid_loop',
+    'wheel_marquee_loop',
+    'red_solid_loop',
+    'red_marquee_loop',
+    'blue_solid_loop',
+    'blue_marquee_loop',
+    'green_solid_loop',
+    'green_marquee_loop',
+    'white_solid_loop',
+    'white_marquee_loop',
     'rando')
   pixels: NeoPixelType
   anim: Animation|None = None
@@ -149,62 +154,77 @@ class Animator:
       self.anim.close()
     self.anim = None
 
-  def anim_wheel_loop(self) -> Animation:
+  def anim_wheel_solid_loop(self) -> Animation:
+    return SolidPathAnimation(
+      self.pixels,
+      path=utils.repeat((0xff0000, 0xff00, 0xff)),
+      interval=self.interval,
+      steps=settings.transition_steps)
+
+  def anim_wheel_marquee_loop(self) -> Animation:
     return MarqueePathAnimation(
       self.pixels,
       path=utils.repeat((0xff0000, 0xff00, 0xff)),
       interval=self.interval,
       steps=settings.transition_steps)
 
-  def anim_red_loop(self) -> Animation:
+  def anim_red_solid_loop(self) -> Animation:
+    return SolidPathAnimation(
+      self.pixels,
+      path=utils.repeat((0xff0000, 0xff00ff)),
+      interval=self.interval,
+      steps=settings.transition_steps)
+
+  def anim_red_marquee_loop(self) -> Animation:
     return MarqueePathAnimation(
       self.pixels,
       path=utils.repeat((0xff0000, 0xff00ff)),
       interval=self.interval,
       steps=settings.transition_steps)
 
-  def anim_blue_loop(self) -> Animation:
+  def anim_blue_solid_loop(self) -> Animation:
+    return SolidPathAnimation(
+      self.pixels,
+      path=utils.repeat((0xff, 0xff00ff)),
+      interval=self.interval,
+      steps=settings.transition_steps)
+
+  def anim_blue_marquee_loop(self) -> Animation:
     return MarqueePathAnimation(
       self.pixels,
       path=utils.repeat((0xff, 0xff00ff)),
       interval=self.interval,
       steps=settings.transition_steps)
 
-  def anim_green_loop(self) -> Animation:
+  def anim_green_solid_loop(self) -> Animation:
+    return SolidPathAnimation(
+      self.pixels,
+      path=utils.repeat((0xff00, 0xffff)),
+      interval=self.interval,
+      steps=settings.transition_steps)
+
+  def anim_green_marquee_loop(self) -> Animation:
     return MarqueePathAnimation(
       self.pixels,
       path=utils.repeat((0xff00, 0xffff)),
       interval=self.interval,
       steps=settings.transition_steps)
 
-  def anim_white_loop(self) -> Animation:
+  def anim_white_solid_loop(self) -> Animation:
+    path = utils.white_temperatures()
     return SolidPathAnimation(
       self.pixels,
-      path=utils.repeat((
-        0xff4b00,  # 1,000 K - Deep Amber / Ember
-        0xff6d00,  # 1,500 K - Candlelight Edge
-        0xff8300,  # 2,000 K - Warm Candlelight
-        0xff9a34,  # 2,500 K - Soft Incandescent
-        0xffad5b,  # 3,000 K - Halogen Studio White
-        0xffbe7c,  # 3,500 K - Warm White Office
-        0xffcc99,  # 4,000 K - Neutral White Accent
-        0xffd8b4,  # 4,500 K - Horizon Daylight
-        0xffe3cc,  # 5,000 K - Noon Sunlight
-        0xffede0,  # 5,500 K - Direct Sun / Daylight
-        0xfff5f0,  # 6,000 K - Digital Photography White
-        0xfef9ff,  # 6,500 K - D65 Standard Daylight
-        0xeaf0ff,  # 7,000 K - High Noon Overcast
-        0xdae7ff,  # 7,500 K - Cool Shade White
-        0xcee0ff,  # 8,000 K - Clear Sky Shade
-        0xc4daff,  # 8,500 K - Cool Daylight
-        0xbad4ff,  # 9,000 K - Deep Sky Blue Tint
-        0xb2d0ff,  # 9,500 K - Polar Daylight
-        0xaccbff,  # 10,000 K - High-Alpine Sky Tint
-        0xa6c7ff,  # 11,000 K - Deep Shade Blue
-        0xa1c3ff,  # 12,000 K - Pure Blue Sky Edge
-      )),
+      path=utils.repeat(path),
       interval=self.interval,
-      steps=settings.transition_steps)
+      steps=max(1, settings.transition_steps // max(1, len(path) // 4 - 1)))
+
+  def anim_white_marquee_loop(self) -> Animation:
+    path = utils.white_temperatures()
+    return MarqueePathAnimation(
+      self.pixels,
+      path=utils.repeat(path),
+      interval=self.interval,
+      steps=max(1, settings.transition_steps // max(1, len(path) // 4 - 1)))
 
   def anim_rando(self) -> Animation:
     def getbuf():

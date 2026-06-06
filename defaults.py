@@ -10,7 +10,7 @@ initial_brightness = brightness_scale // 2
 # Animation settings
 speeds = range(0x100, 0, -0x8)
 initial_speed = len(speeds) // 2
-initial_routine = 'wheel_loop'
+initial_routine = 'wheel_solid_loop'
 min_micros_interval = 700
 transition_steps = 0x80
 rando_fillchance = 0.2

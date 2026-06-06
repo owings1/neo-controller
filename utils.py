@@ -93,6 +93,31 @@ def absindex(i: int, length: int) -> int:
   except ZeroDivisionError:
     raise IndexError
 
+def white_temperatures() -> tuple[int, ...]:
+  return (    
+    0xff4b00,  # 1,000 K - Deep Amber / Ember
+    0xff6d00,  # 1,500 K - Candlelight Edge
+    0xff8300,  # 2,000 K - Warm Candlelight
+    0xff9a34,  # 2,500 K - Soft Incandescent
+    0xffad5b,  # 3,000 K - Halogen Studio White
+    0xffbe7c,  # 3,500 K - Warm White Office
+    0xffcc99,  # 4,000 K - Neutral White Accent
+    0xffd8b4,  # 4,500 K - Horizon Daylight
+    0xffe3cc,  # 5,000 K - Noon Sunlight
+    0xffede0,  # 5,500 K - Direct Sun / Daylight
+    0xfff5f0,  # 6,000 K - Digital Photography White
+    0xfef9ff,  # 6,500 K - D65 Standard Daylight
+    0xeaf0ff,  # 7,000 K - High Noon Overcast
+    0xdae7ff,  # 7,500 K - Cool Shade White
+    0xcee0ff,  # 8,000 K - Clear Sky Shade
+    0xc4daff,  # 8,500 K - Cool Daylight
+    0xbad4ff,  # 9,000 K - Deep Sky Blue Tint
+    0xb2d0ff,  # 9,500 K - Polar Daylight
+    0xaccbff,  # 10,000 K - High-Alpine Sky Tint
+    0xa6c7ff,  # 11,000 K - Deep Shade Blue
+    0xa1c3ff,  # 12,000 K - Pure Blue Sky Edge
+  )
+
 def init_settings(defaults: MT, settings: ModuleType) -> MT:
   for name in defaults.__dict__:
     if not hasattr(settings, name):
